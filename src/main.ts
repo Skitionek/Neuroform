@@ -68,14 +68,14 @@ const state: PanelState = {
     pulseIntensity: 1.2,
     cometLength: 0.055,
     bloom: 0.45,
-    autoRotate: false,
+    autoRotate: true,
     restFps: 20,
     neurons: true,
     // Small blobs on every node; the merge is depth-aware, so only nodes
     // that are actually close fuse.
     cellDensity: 1,
-    cellSize: 0.0008,
-    cellZoom: 0.75,
+    cellSize: 0.003,
+    cellZoom: 1,
   },
 };
 

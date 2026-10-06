@@ -333,7 +333,7 @@ export class MembraneLayer {
     this.sim = sim;
     const radius = options.cellSize ?? 0.0018;
     this.baseRadius = radius;
-    this.cellZoom = options.cellZoom ?? 0.75;
+    this.cellZoom = options.cellZoom ?? 1;
     this.referenceDistance = options.referenceDistance ?? 2;
     nodeGeometry.computeBoundingSphere();
     this.centre.value.copy(nodeGeometry.boundingSphere!.center);
