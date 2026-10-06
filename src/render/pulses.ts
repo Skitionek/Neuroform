@@ -15,7 +15,6 @@ import {
   BufferAttribute,
   BufferGeometry,
   DynamicDrawUsage,
-  GLSL3,
   LineSegments,
   ShaderMaterial,
 } from 'three';
@@ -51,8 +50,6 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
-  layout(location = 0) out highp vec4 outColor;
-  layout(location = 1) out highp vec4 outMask;
   uniform vec3 uColor;
   uniform float uIntensity;
 
@@ -73,9 +70,7 @@ const fragmentShader = /* glsl */ `
     float glow = (head + tail) * vAmp * uIntensity;
     if (glow < 0.004) discard;
 
-    outColor = vec4(uColor * glow, clamp(glow, 0.0, 1.0));
-    // Pulses are light, not tissue: nothing in the gooey mask.
-    outMask = vec4(0.0, 0.0, 0.0, 1.0);
+    gl_FragColor = vec4(uColor * glow, clamp(glow, 0.0, 1.0));
   }
 `;
 
@@ -119,7 +114,6 @@ export class PulseLayer {
     this.material = new ShaderMaterial({
       vertexShader,
       fragmentShader,
-      glslVersion: GLSL3,
       uniforms: {
         ...nodes.uniforms(),
         uTime: { value: 0 },

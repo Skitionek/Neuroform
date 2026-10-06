@@ -52,14 +52,6 @@ on the half of the brain facing the camera, and light up when their node
 fires. `cellDensity` below 1 makes only a share of the nodes into cells
 (larger `cellSize` then reads as sparse neurons with long neurites).
 
-Two experimental alternatives draw the network once and make the cells in
-post instead (`src/render/mask.ts`, `src/render/gooey-post.ts`): the scene
-pass also writes a mask, which `post` blurs with a depth-aware filter and
-`channels` encodes as near/far in red/green with brightness in blue, making
-only the near share gooey. Measured at 26k nodes they cost more than the
-geometry cells (5.2x and 3.3x frame time against 2.1x, in a software
-renderer): full-screen blurs scale with pixels, not nodes.
-
 **The rendering** is three draw calls: the point cloud; every synapse, as a
 very dim line (long-range tracts tinted violet in the same draw); and every
 pulse in flight, drawn as a comet running from the firing node toward its
@@ -161,8 +153,7 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
-| `cellMode` | how cells are drawn: `geometry` (default), `post`, `channels` or `off` |
-| `cellDensity`, `cellSize` | share of nodes drawn as cells, blob radius |
+| `neurons`, `cellDensity`, `cellSize` | cells on or off (`0`), share of nodes drawn as cells, blob radius |
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
