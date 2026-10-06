@@ -48,21 +48,20 @@ export interface SimParams {
 
 export const DEFAULT_PARAMS: SimParams = {
   speed: 0.5,
-  // Threshold sits just under the charge one strong synapse delivers, so a
-  // healthy connection fires its neighbour outright while a weak or attenuated
-  // one has to arrive alongside another to count. That mix is what gives the
-  // wave front its ragged edge.
-  threshold: 0.55,
-  gain: 1,
-  decay: 0.35,
-  refractory: 0.9,
-  reliability: 0.9,
+  // Threshold sits just under the charge a strong synapse delivers, so a
+  // healthy connection fires its neighbour outright while a weak one has to
+  // arrive alongside another to count. With synapses this unreliable, that
+  // mix is what gives the wave front its ragged, branching edge.
+  threshold: 0.45,
+  gain: 0.63,
+  decay: 0.96,
+  refractory: 0.46,
+  reliability: 0.39,
   // Signals meander rather than travelling straight, so the useful range runs
-  // past the cloud's own diameter. At this value one click sweeps roughly four
-  // fifths of the brain over about five seconds, then the network goes quiet.
-  range: 2,
+  // past the cloud's own diameter.
+  range: 2.75,
   glow: 0.65,
-  spontaneous: 0.12,
+  spontaneous: 0.7,
   shimmer: 140,
   maxPulses: 24000,
 };
