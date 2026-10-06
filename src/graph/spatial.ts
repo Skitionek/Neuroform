@@ -73,34 +73,107 @@ export class UniformGrid {
 }
 
 /**
- * Exact k-nearest-neighbour queries on a grid, by expanding rings of cells.
+ * Exact k-nearest-neighbour queries on an implicit k-d tree.
  *
- * Cost depends on k, not on how many points lie within the search radius, so
- * it stays flat as the cloud gets denser. The previous approach gathered every
- * point within reach and sorted them all, which grows linearly with density
- * and made wiring quadratic in node count.
+ * The tree is kdbush's layout extended to 3D: point ids and coordinates are
+ * reordered in place by recursive Floyd-Rivest selection, so every subtree is
+ * a contiguous index range split at its median and there are no node objects
+ * at all. Unlike a uniform grid it adapts to density: clustered data, or one
+ * stray point that inflates the bounding box, cost the same as an even cloud.
+ * (A grid sized from the bounding box went quadratic on exactly those: 40x
+ * slower with a single outlier.)
+ *
+ * Results are ordered by (distance², index) and distances are computed from
+ * the original float32 positions in doubles, so callers can rely on the order
+ * matching a brute-force sort exactly.
  */
 export class NearestFinder {
-  private grid: UniformGrid;
+  /** Subtrees at most this large are scanned linearly. */
+  private static readonly LEAF = 16;
+
+  private ids: Uint32Array;
+  private coords: Float32Array;
   private positions: Float32Array;
+  private count: number;
+  // Traversal stack: [left, right, axis, lower bound on distance²] per entry.
+  private stack = new Float64Array(256);
   // Max-heap of the best k so far, keyed by (distance², index).
   private heapIdx = new Int32Array(0);
   private heapD2 = new Float64Array(0);
   private size = 0;
+  private self = -1;
   /** Results of the last query, nearest first. */
   idx = new Int32Array(0);
   d2 = new Float64Array(0);
 
-  constructor(grid: UniformGrid, positions: Float32Array) {
-    this.grid = grid;
+  constructor(positions: Float32Array, count: number) {
     this.positions = positions;
+    this.count = count;
+    this.ids = new Uint32Array(count);
+    this.coords = positions.slice(0, count * 3);
+    for (let i = 0; i < count; i++) this.ids[i] = i;
+    if (count > 0) this.build(0, count - 1, 0);
+  }
+
+  private build(left: number, right: number, axis: number): void {
+    if (right - left <= NearestFinder.LEAF) return;
+    const m = (left + right) >> 1;
+    this.select(m, left, right, axis);
+    const next = axis === 2 ? 0 : axis + 1;
+    this.build(left, m - 1, next);
+    this.build(m + 1, right, next);
+  }
+
+  /**
+   * Floyd-Rivest selection: reorders [left, right] so the item at k is the
+   * one a sort on `axis` would put there, with smaller ones before it.
+   */
+  private select(k: number, left: number, right: number, axis: number): void {
+    const c = this.coords;
+    while (right > left) {
+      if (right - left > 600) {
+        const n = right - left + 1;
+        const m = k - left + 1;
+        const z = Math.log(n);
+        const s = 0.5 * Math.exp((2 * z) / 3);
+        const sd = 0.5 * Math.sqrt((z * s * (n - s)) / n) * (m - n / 2 < 0 ? -1 : 1);
+        const newLeft = Math.max(left, Math.floor(k - (m * s) / n + sd));
+        const newRight = Math.min(right, Math.floor(k + ((n - m) * s) / n + sd));
+        this.select(k, newLeft, newRight, axis);
+      }
+      const t = c[3 * k + axis];
+      let i = left;
+      let j = right;
+      this.swap(left, k);
+      if (c[3 * right + axis] > t) this.swap(left, right);
+      while (i < j) {
+        this.swap(i, j);
+        i++;
+        j--;
+        while (c[3 * i + axis] < t) i++;
+        while (c[3 * j + axis] > t) j--;
+      }
+      if (c[3 * left + axis] === t) this.swap(left, j);
+      else {
+        j++;
+        this.swap(j, right);
+      }
+      if (j <= k) left = j + 1;
+      if (k <= j) right = j - 1;
+    }
+  }
+
+  private swap(i: number, j: number): void {
+    const { ids, coords: c } = this;
+    const id = ids[i]; ids[i] = ids[j]; ids[j] = id;
+    for (let a = 0; a < 3; a++) {
+      const t = c[3 * i + a]; c[3 * i + a] = c[3 * j + a]; c[3 * j + a] = t;
+    }
   }
 
   /**
    * Finds up to `k` nearest points to node `self` within `radius`, excluding
    * `self`, ordered by distance then index. Returns how many were found.
-   * Distances are computed exactly as `positions[j] - positions[self]` in
-   * doubles, so callers can rely on the ordering matching a brute-force sort.
    */
   query(self: number, k: number, radius: number): number {
     if (this.heapIdx.length < k) {
@@ -110,44 +183,48 @@ export class NearestFinder {
       this.d2 = new Float64Array(k);
     }
     this.size = 0;
+    this.self = self;
+    if (this.count === 0) return 0;
 
-    const { grid, positions } = this;
+    const { coords: c, positions } = this;
     const x = positions[self * 3], y = positions[self * 3 + 1], z = positions[self * 3 + 2];
-    const cx = grid.coord(x, 0), cy = grid.coord(y, 1), cz = grid.coord(z, 2);
-    const [dx, dy, dz] = grid.dims;
     const r2 = radius * radius;
-    const maxRing = Math.max(dx, dy, dz);
+    let stack = this.stack;
+    let sp = 0;
+    stack[sp++] = 0; stack[sp++] = this.count - 1; stack[sp++] = 0; stack[sp++] = 0;
 
-    for (let ring = 0; ring <= maxRing; ring++) {
-      for (let kz = cz - ring; kz <= cz + ring; kz++) {
-        if (kz < 0 || kz >= dz) continue;
-        const onZ = kz === cz - ring || kz === cz + ring;
-        for (let ky = cy - ring; ky <= cy + ring; ky++) {
-          if (ky < 0 || ky >= dy) continue;
-          const onY = onZ || ky === cy - ring || ky === cy + ring;
-          // Only the shell of the ring: interior cells were visited already.
-          const step = onY ? 1 : 2 * ring;
-          for (let kx = cx - ring; kx <= cx + ring; kx += step || 1) {
-            if (kx < 0 || kx >= dx) continue;
-            const b = kx + dx * (ky + dy * kz);
-            for (let s = grid.start[b], e = grid.start[b + 1]; s < e; s++) {
-              const j = grid.items[s];
-              if (j === self) continue;
-              const ex = positions[j * 3] - x;
-              const ey = positions[j * 3 + 1] - y;
-              const ez = positions[j * 3 + 2] - z;
-              const d2 = ex * ex + ey * ey + ez * ez;
-              if (d2 > r2) continue;
-              this.offer(j, d2, k);
-            }
-          }
-        }
+    while (sp > 0) {
+      const bound = stack[--sp];
+      const axis = stack[--sp];
+      const right = stack[--sp];
+      const left = stack[--sp];
+      // Nothing in this subtree can beat the current k-th best (or the reach).
+      if (bound > (this.size === k ? this.heapD2[0] : r2)) continue;
+
+      if (right - left <= NearestFinder.LEAF) {
+        for (let i = left; i <= right; i++) this.consider(i, x, y, z, k, r2);
+        continue;
       }
-      // Everything within ring * cell of the query is now known. Stop once
-      // that covers either the search radius or the k-th best distance.
-      const covered = ring * grid.cell;
-      if (covered >= radius) break;
-      if (this.size === k && this.heapD2[0] <= covered * covered) break;
+
+      const m = (left + right) >> 1;
+      this.consider(m, x, y, z, k, r2);
+      const diff = (axis === 0 ? x : axis === 1 ? y : z) - c[3 * m + axis];
+      const next = axis === 2 ? 0 : axis + 1;
+      const farBound = Math.max(bound, diff * diff);
+      if (sp + 8 > stack.length) {
+        const grown = new Float64Array(stack.length * 2);
+        grown.set(stack);
+        this.stack = stack = grown;
+      }
+      // Far side pushed first so the near side pops first and tightens the
+      // bound before the far side is reconsidered.
+      if (diff < 0) {
+        stack[sp++] = m + 1; stack[sp++] = right; stack[sp++] = next; stack[sp++] = farBound;
+        stack[sp++] = left; stack[sp++] = m - 1; stack[sp++] = next; stack[sp++] = bound;
+      } else {
+        stack[sp++] = left; stack[sp++] = m - 1; stack[sp++] = next; stack[sp++] = farBound;
+        stack[sp++] = m + 1; stack[sp++] = right; stack[sp++] = next; stack[sp++] = bound;
+      }
     }
 
     // Heap to ascending order.
@@ -158,6 +235,23 @@ export class NearestFinder {
       this.popMax();
     }
     return n;
+  }
+
+  /**
+   * Tests the point at tree slot `t`. Reads the tree's own coordinate copy,
+   * which is laid out in traversal order (sequential memory access), and holds
+   * the same float32 values as `positions`, so distances are bit-identical.
+   */
+  private consider(t: number, x: number, y: number, z: number, k: number, r2: number): void {
+    const j = this.ids[t];
+    if (j === this.self) return;
+    const c = this.coords;
+    const ex = c[t * 3] - x;
+    const ey = c[t * 3 + 1] - y;
+    const ez = c[t * 3 + 2] - z;
+    const d2 = ex * ex + ey * ey + ez * ez;
+    if (d2 > r2) return;
+    this.offer(j, d2, k);
   }
 
   /** (d2, j) sorts after (d2', j') when farther, or equally far with a larger index. */

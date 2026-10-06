@@ -48,14 +48,18 @@ node toward its neighbour.
 
 The network is generated on a Web Worker, so the current one keeps animating
 while its replacement is built. 100,000 nodes and 340,000 synapses build in
-about 2.5 seconds off the main thread; swapping them in costs ~70ms on it.
+about 2 seconds off the main thread; swapping them in costs ~70ms on it.
 
 - **Sampling** brackets each field with cheap analytic bounds and only
   evaluates the noise where those bounds can't decide, which is under 8% of
-  candidates. Same output as evaluating everything.
-- **Wiring** finds each node's exact k nearest neighbours by expanding rings
-  on a grid, so its cost depends on k rather than on how many points sit within
-  reach. Linear in node count; same graph as an exhaustive search.
+  candidates. The small regions are drawn from their own tight boxes rather
+  than the whole brain's, and normals come from the smooth surface rather than
+  the noisy one.
+- **Wiring** finds each node's exact k nearest neighbours in an implicit k-d
+  tree (kdbush's layout, in 3D), so its cost depends on k rather than on how
+  many points sit within reach, and stays flat on clustered data or data with
+  stray outliers, where a grid goes quadratic. Same graph as an exhaustive
+  search.
 - **The simulation is event-driven.** Pulses sit in a heap keyed by arrival
   time; charge leaks lazily when a pulse lands; glow is stored as (peak, start
   time) and decayed in the vertex shader. A frame costs time proportional to
@@ -66,6 +70,11 @@ about 2.5 seconds off the main thread; swapping them in costs ~70ms on it.
   over the node attributes rather than a copy of them.
 - **Picking** marches the pointer ray through a grid instead of testing every
   point.
+- **Rendering is paced.** While a wave runs or the camera is being handled,
+  every frame is drawn; at rest only slow motion remains, so frames are drawn
+  at `restFps` (20 by default) and the rest are skipped, about two thirds of
+  them. The orbit is driven by elapsed time, so it turns at the same speed at
+  any frame rate or refresh rate.
 
 ## Driving it from data
 
@@ -86,6 +95,18 @@ dataset is another. Load one with `?dataset=/your-graph.json`:
 scaled on load, so any units work. `public/sample-graph.json` is a worked
 example: `?dataset=/sample-graph.json`.
 
+For large data, any field can instead be a binary typed array in plotly's
+format, which is what plotly.py writes for numpy arrays:
+
+```json
+{ "nodes": { "dtype": "f4", "bdata": "<base64>", "shape": "100000,3" },
+  "edges": { "dtype": "u4", "bdata": "<base64>", "shape": "340000,2" } }
+```
+
+It loads about 40x faster than plain numbers (100k nodes and 340k synapses in
+~12 ms instead of ~490 ms) and is smaller. Plain and binary fields can be mixed.
+`public/sample-graph.typed.json` is the same sample in this form.
+
 Everything downstream reads the same `NetworkGraph`, so nothing in the
 simulation or the renderer changes when the network starts coming from a
 dataset instead of from noise.
@@ -105,6 +126,7 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `reliability` | how often a synapse actually transmits |
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
+| `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
 `window.neuroform` exposes the graph, the simulation and the layers for driving
