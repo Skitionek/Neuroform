@@ -21,11 +21,9 @@ import {
 import type { NetworkSim } from '../sim/network';
 import { NODE_FETCH_GLSL, setPulledBounds, vertexCountCarrier, type NodeTextures } from './node-textures';
 import { PALETTE } from './palette';
-import { SPLIT_GLSL, type SplitUniforms } from './split';
 
 const vertexShader = /* glsl */ `
   ${NODE_FETCH_GLSL}
-  ${SPLIT_GLSL}
   uniform float uTime;
   uniform float uCometLength;
 
@@ -41,11 +39,6 @@ const vertexShader = /* glsl */ `
   void main() {
     vec3 a = nodePosition(aEnds.x).xyz;
     vec3 b = nodePosition(aEnds.y).xyz;
-    // The wire's midpoint decides the side, so the whole comet moves together.
-    if (!onDrawnSide(0.5 * (a + b))) {
-      gl_Position = CULLED;
-      return;
-    }
     vT = float(gl_VertexID & 1);
     vHead = clamp((uTime - aTiming.x) / aTiming.y, 0.0, 1.0);
     vAmp = aTiming.z;
@@ -59,7 +52,6 @@ const vertexShader = /* glsl */ `
 const fragmentShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uIntensity;
-  uniform float uPixelScale;
 
   varying float vT;
   varying float vHead;
@@ -78,9 +70,7 @@ const fragmentShader = /* glsl */ `
     float glow = (head + tail) * vAmp * uIntensity;
     if (glow < 0.004) discard;
 
-    // Low-resolution compensation on alpha alone: additive blending multiplies
-    // rgb by alpha, so scaling both would apply it squared.
-    gl_FragColor = vec4(uColor * glow, clamp(glow, 0.0, 1.0) * uPixelScale);
+    gl_FragColor = vec4(uColor * glow, clamp(glow, 0.0, 1.0));
   }
 `;
 
@@ -100,7 +90,7 @@ export class PulseLayer {
   private ends: BufferAttribute;
   private timing: BufferAttribute;
 
-  constructor(sim: NetworkSim, nodes: NodeTextures, split: SplitUniforms, options: PulseLayerOptions = {}) {
+  constructor(sim: NetworkSim, nodes: NodeTextures, options: PulseLayerOptions = {}) {
     const { cometLength = 0.055, intensity = 1.2 } = options;
     this.sim = sim;
     const capacity = sim.pulses.capacity;
@@ -126,7 +116,6 @@ export class PulseLayer {
       fragmentShader,
       uniforms: {
         ...nodes.uniforms(),
-        ...split,
         uTime: { value: 0 },
         uCometLength: { value: cometLength },
         uColor: { value: PALETTE.pulse.clone() },

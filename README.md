@@ -89,16 +89,6 @@ brackets each pass with `gl.finish()` instead: it stalls the pipeline, so the
 totals are inflated, but it still ranks the passes. From a script:
 `neuroform.gpuTimings()` and `neuroform.resetGpuTimings()`.
 
-### The far-half split
-
-`farResolution` below 1 renders the half of the brain behind its centre at
-reduced resolution and adds it back in. The frame is additive, so this is
-lossless at full resolution; at 0.5 the far half softens into something like
-depth of field. It is off by default: each half still runs the vertex shader
-for every point and synapse, and in testing that extra work outweighed the
-fill it saved. It may win where fill dominates, such as high-DPI screens or
-large point sizes, which `?gpu=1` will show.
-
 ## Driving it from data
 
 The generator is one implementation of `GraphSource` (`src/graph/types.ts`); a
@@ -150,7 +140,6 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
-| `farResolution` | resolution of the far half of the brain, `1` (default) to `0.25` |
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
