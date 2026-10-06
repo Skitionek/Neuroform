@@ -1,5 +1,11 @@
 /**
- * The point cloud itself. One draw call, one dynamic float per node.
+ * The point cloud itself. One draw call.
+ *
+ * Glow is computed here, not on the CPU: each node carries (peak, start time)
+ * and the vertex shader applies the exponential decay against the current
+ * time. The buffer is the simulation's own array, and only the entries that
+ * changed this frame are uploaded, so a resting network costs nothing per
+ * frame however many points it has.
  */
 import {
   AdditiveBlending,
@@ -10,20 +16,24 @@ import {
   Points,
   ShaderMaterial,
 } from 'three';
+import { uploadDirty } from '../core/dirty';
 import type { NetworkGraph } from '../graph/types';
+import { GLOW_FLOOR, type NetworkSim } from '../sim/network';
 import { PALETTE, tissueColorFor } from './palette';
 
 const vertexShader = /* glsl */ `
   attribute float aDepth;
-  attribute float aActivation;
+  attribute vec2 aGlow;
   attribute float aSeed;
   attribute vec3 aTissue;
 
   uniform float uSize;
   uniform float uViewportScale;
   uniform float uTime;
+  uniform float uGlowHalfLife;
   uniform float uBreath;
   uniform float uDim;
+  uniform int uHover;
 
   varying vec3 vColor;
   varying float vGlow;
@@ -38,13 +48,18 @@ const vertexShader = /* glsl */ `
     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
 
-    float act = clamp(aActivation, 0.0, 1.0);
+    // glow = peak * 0.5^(elapsed / half-life), floored to zero like the sim.
+    float act = aGlow.x * exp2(-max(0.0, uTime - aGlow.y) / uGlowHalfLife);
+    act = act < GLOW_FLOOR ? 0.0 : act;
+    // The pointer gets a lift so it has something to aim at before firing.
+    if (gl_VertexID == uHover) act += 0.75;
+    act = clamp(act, 0.0, 1.0);
 
     // Deep points are smaller and dimmer: the surface should read first.
-    float depthFade = mix(1.0, 0.42, aDepth);
     // uSize is a pixel size at one unit of distance, on a reference 800px-tall
     // viewport. uViewportScale carries resolution and device pixel ratio, so
     // the cloud looks the same on a laptop and on a phone.
+    float depthFade = mix(1.0, 0.42, aDepth);
     float size = uSize * depthFade * (0.72 + 0.5 * aSeed) * (1.0 + 3.2 * act);
     gl_PointSize = clamp(size * uViewportScale / max(0.08, -mv.z), 0.6, 96.0);
 
@@ -80,13 +95,15 @@ export interface NodeLayerOptions {
 
 export class NodeLayer {
   readonly points: Points;
+  readonly geometry: BufferGeometry;
   readonly material: ShaderMaterial;
-  private activation: BufferAttribute;
-  private scratch: Float32Array;
+  private glow: BufferAttribute;
+  private sim: NetworkSim;
 
-  constructor(graph: NetworkGraph, options: NodeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, sim: NetworkSim, options: NodeLayerOptions = {}) {
     const { size = 4.8 } = options;
     const n = graph.nodeCount;
+    this.sim = sim;
 
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(graph.positions, 3));
@@ -107,24 +124,28 @@ export class NodeLayer {
     geometry.setAttribute('aSeed', new BufferAttribute(seeds, 1));
     geometry.setAttribute('aTissue', new BufferAttribute(tissue, 3));
 
-    this.scratch = new Float32Array(n);
-    this.activation = new BufferAttribute(this.scratch, 1);
-    this.activation.setUsage(DynamicDrawUsage);
-    geometry.setAttribute('aActivation', this.activation);
+    // The simulation's own array: no per-frame copy.
+    this.glow = new BufferAttribute(sim.glow, 2);
+    this.glow.setUsage(DynamicDrawUsage);
+    geometry.setAttribute('aGlow', this.glow);
     geometry.computeBoundingSphere();
+    this.geometry = geometry;
 
     const { signal, signalCore } = PALETTE;
     this.material = new ShaderMaterial({
       vertexShader: vertexShader
         .replace(/SIGNAL_CORE/g, glslColor(signalCore))
-        .replace(/SIGNAL/g, glslColor(signal)),
+        .replace(/SIGNAL/g, glslColor(signal))
+        .replace(/GLOW_FLOOR/g, GLOW_FLOOR.toFixed(6)),
       fragmentShader,
       uniforms: {
         uSize: { value: size },
         uViewportScale: { value: 1 },
         uTime: { value: 0 },
+        uGlowHalfLife: { value: 0.65 },
         uBreath: { value: 1 },
         uDim: { value: 1 },
+        uHover: { value: -1 },
       },
       transparent: true,
       depthWrite: false,
@@ -135,17 +156,13 @@ export class NodeLayer {
     this.points.frustumCulled = false;
   }
 
-  /**
-   * Copies simulation glow into the GPU buffer. `hovered` gets an extra lift so
-   * the pointer has something to aim at before the node is actually fired.
-   */
-  update(activation: Float32Array, time: number, hovered = -1): void {
-    this.scratch.set(activation);
-    if (hovered >= 0 && hovered < this.scratch.length) {
-      this.scratch[hovered] = Math.min(1, this.scratch[hovered] + 0.75);
-    }
-    this.activation.needsUpdate = true;
-    this.material.uniforms.uTime.value = time;
+  /** Uploads the glow entries that changed and advances the shader clock. */
+  update(hovered = -1): void {
+    uploadDirty(this.glow, this.sim.glowDirty);
+    const u = this.material.uniforms;
+    u.uTime.value = this.sim.now;
+    u.uGlowHalfLife.value = Math.max(0.01, this.sim.params.glow);
+    u.uHover.value = hovered;
   }
 
   /** Keeps dots the same apparent size across resolutions and screen heights. */
@@ -154,7 +171,7 @@ export class NodeLayer {
   }
 
   dispose(): void {
-    this.points.geometry.dispose();
+    this.geometry.dispose();
     this.material.dispose();
   }
 }

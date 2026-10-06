@@ -5,6 +5,7 @@
 import {
   Clock,
   Group,
+  Matrix4,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -17,11 +18,12 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
-import { datasetGraph, proceduralBrain } from './graph/sources';
-import type { GraphSource, NetworkGraph } from './graph/types';
+import { GraphBuilder, SupersededError, type GraphRequest } from './graph/request';
+import type { NetworkGraph } from './graph/types';
 import { DEFAULT_PARAMS, NetworkSim } from './sim/network';
 import { EdgeLayer } from './render/edges';
 import { NodeLayer } from './render/nodes';
+import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { PALETTE } from './render/palette';
 import { createPanel, type PanelState } from './ui/panel';
@@ -135,66 +137,75 @@ let sim: NetworkSim;
 let nodeLayer: NodeLayer;
 let edgeLayer: EdgeLayer;
 let pulseLayer: PulseLayer;
-/** False while a rebuild is in flight, when the layers are disposed or absent. */
+let picker: NodePicker;
+/** False until the first network is in place. */
 let ready = false;
-/** Rebuilds are async; only the newest one is allowed to publish its result. */
-let buildToken = 0;
+/** Shown in the readout while a rebuild runs; the old network keeps animating. */
+let building = false;
 
-function currentSource(): GraphSource {
+const builder = new GraphBuilder();
+
+function currentRequest(): GraphRequest {
   // `?dataset=/my-graph.json` loads a network from data instead of generating
   // one. Everything downstream reads the same NetworkGraph either way.
   const dataset = new URLSearchParams(window.location.search).get('dataset');
-  if (dataset) return datasetGraph(dataset);
+  if (dataset) return { kind: 'dataset', url: new URL(dataset, window.location.href).href };
 
-  return proceduralBrain({
-    count: state.structure.nodes,
-    seed: state.structure.seed,
-    shell: state.structure.shell,
-    foldDepth: state.structure.foldDepth,
-    foldScale: state.structure.foldScale,
-    minDegree: state.structure.minDegree,
-    maxDegree: state.structure.maxDegree,
-    radius: state.structure.radius,
-  });
+  return {
+    kind: 'procedural',
+    options: {
+      count: state.structure.nodes,
+      seed: state.structure.seed,
+      shell: state.structure.shell,
+      foldDepth: state.structure.foldDepth,
+      foldScale: state.structure.foldScale,
+      minDegree: state.structure.minDegree,
+      maxDegree: state.structure.maxDegree,
+      radius: state.structure.radius,
+    },
+  };
 }
 
 function teardown(): void {
   if (!nodeLayer) return;
-  world.remove(nodeLayer.points, edgeLayer.lines, pulseLayer.lines);
-  nodeLayer.dispose();
+  world.remove(nodeLayer.points, edgeLayer.object, pulseLayer.lines);
+  // Edges first: they borrow the node layer's attributes.
   edgeLayer.dispose();
+  nodeLayer.dispose();
   pulseLayer.dispose();
 }
 
 async function build(): Promise<void> {
-  const token = ++buildToken;
-  ready = false;
-  readout.textContent = 'growing network…';
-  // Yield once so the message paints before the synchronous build blocks.
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  building = true;
+  if (!ready) readout.textContent = 'growing network…';
 
+  // The network is generated on a worker, so the current one keeps animating
+  // (and stays interactive) until its replacement is ready.
   let next: NetworkGraph;
   try {
-    next = await currentSource().load();
+    next = await builder.build(currentRequest());
   } catch (error) {
+    if (error instanceof SupersededError) return; // a newer build owns the readout
+    building = false;
     readout.textContent = `could not build network: ${(error as Error).message}`;
     return;
   }
-  // A newer rebuild started while this one was loading; drop this result.
-  if (token !== buildToken) return;
+  building = false;
 
+  // Swap synchronously, so no frame ever sees a half-built scene.
   teardown();
   graph = next;
   sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
 
-  nodeLayer = new NodeLayer(graph, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, { opacity: state.look.edgeOpacity });
-  pulseLayer = new PulseLayer(graph, {
-    capacity: DEFAULT_PARAMS.maxPulses,
+  nodeLayer = new NodeLayer(graph, sim, { size: state.look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeLayer.geometry, { opacity: state.look.edgeOpacity });
+  pulseLayer = new PulseLayer(graph, sim, {
     cometLength: state.look.cometLength,
     intensity: state.look.pulseIntensity,
   });
-  world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
+  picker = new NodePicker(graph.positions, graph.nodeCount);
+  world.add(edgeLayer.object, pulseLayer.lines, nodeLayer.points);
+  hovered = -1;
 
   applyLook();
   resize();
@@ -223,7 +234,7 @@ function applyLook(): void {
 /* -------------------------------------------------------------- interaction */
 
 const raycaster = new Raycaster();
-raycaster.params.Points.threshold = 0.012;
+const toLocal = new Matrix4();
 const pointer = new Vector2();
 let pointerInside = false;
 let pointerMoved = false;
@@ -242,10 +253,12 @@ function updatePointer(event: PointerEvent): void {
 
 function pick(): number {
   raycaster.setFromCamera(pointer, camera);
+  // The picker works in the cloud's own space.
+  toLocal.copy(nodeLayer.points.matrixWorld).invert();
+  raycaster.ray.applyMatrix4(toLocal);
   // Scale the pick radius with distance so far-away dots stay clickable.
-  raycaster.params.Points.threshold = 0.008 * camera.position.length();
-  const hits = raycaster.intersectObject(nodeLayer.points, false);
-  return hits.length > 0 && hits[0].index !== undefined ? hits[0].index : -1;
+  const threshold = Math.min(picker.maxThreshold, 0.008 * camera.position.length());
+  return picker.pick(raycaster.ray, threshold);
 }
 
 canvas.addEventListener('pointermove', (event) => {
@@ -323,8 +336,8 @@ function frame(): void {
     needsPick = false;
   }
 
-  nodeLayer.update(sim.activation, sim.now, pointerInside ? hovered : -1);
-  pulseLayer.update(sim.pulses);
+  nodeLayer.update(pointerInside ? hovered : -1);
+  pulseLayer.update();
 
   controls.update();
   if (window.neuroform.postprocessing) {
@@ -345,7 +358,7 @@ function frame(): void {
       `${sim.livePulses.toLocaleString()} in flight`,
       `${firingRate.toFixed(0)} firings/s`,
       `${fps.toFixed(0)} fps`,
-      hovered >= 0 ? `node ${hovered}` : 'click a node · space fires one · r quiets',
+      building ? 'growing a new network…' : hovered >= 0 ? `node ${hovered}` : 'click a node · space fires one · r quiets',
     ].join('   ·   ');
   }
 }
@@ -361,6 +374,8 @@ declare global {
     neuroform: {
       stimulate(node?: number): void;
       reset(): void;
+      /** Rebuilds the network, optionally changing structure settings first. */
+      rebuild(structure?: Partial<PanelState['structure']>): Promise<void>;
       get graph(): NetworkGraph;
       get sim(): NetworkSim;
       layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer };
@@ -377,6 +392,10 @@ window.neuroform = {
     if (ready) sim.stimulate(node ?? Math.floor(Math.random() * graph.nodeCount), 1);
   },
   reset: () => sim.reset(),
+  rebuild: (structure) => {
+    Object.assign(state.structure, structure);
+    return build();
+  },
   get graph() { return graph; },
   get sim() { return sim; },
   get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer }; },
