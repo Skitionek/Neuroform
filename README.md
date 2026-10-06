@@ -39,6 +39,20 @@ threshold fires and then sits refractory. Signal amplitude decays with the
 *distance travelled* rather than per hop, so how far a wave spreads stays the
 same whether the cloud has 5,000 points or 100,000.
 
+**The neurons** (`src/graph/neurons.ts`, `src/render/membranes.ts`) are a
+sparse share of the nodes drawn as cells: soft, wobbling cell bodies with
+tapering neurites that fuse into them, after the CSS "gooey" recipe (blur,
+then threshold alpha with `feColorMatrix ... 18 -6`). Somas and neurites are
+drawn as soft density into a half-resolution buffer; a full-screen pass
+thresholds it with the same ramp and lights a membrane rim just inside the
+edge. Two somas are linked when a short synaptic path joins them, so the
+neurites follow the real wiring; with a dataset where every node is a neuron,
+set `cellDensity` to 1 and they are the synapses. Cells are drawn on the half
+of the brain facing the camera, fading out toward the far side, because the
+threshold works in screen space and would otherwise fuse near cells with far
+ones. A cell lights up when its node fires, and the glow runs out along its
+neurites.
+
 **The rendering** is three draw calls: the point cloud; every synapse, as a
 very dim line (long-range tracts tinted violet in the same draw); and every
 pulse in flight, drawn as a comet running from the firing node toward its
@@ -140,6 +154,7 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
+| `neurons`, `cellDensity`, `cellSize` | cells on or off (`0`), share of nodes drawn as cells, cell body radius |
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
