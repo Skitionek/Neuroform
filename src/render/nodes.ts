@@ -13,12 +13,14 @@ import {
   BufferGeometry,
   Color,
   DynamicDrawUsage,
+  GLSL3,
   Points,
   ShaderMaterial,
 } from 'three';
 import { uploadDirty } from '../core/dirty';
 import type { NetworkGraph } from '../graph/types';
 import { GLOW_FLOOR, type NetworkSim } from '../sim/network';
+import { MASK_FRAGMENT_GLSL, type MaskUniforms } from './mask';
 import { PALETTE, tissueColorFor } from './palette';
 
 const vertexShader = /* glsl */ `
@@ -37,6 +39,7 @@ const vertexShader = /* glsl */ `
 
   varying vec3 vColor;
   varying float vGlow;
+  varying float vViewDepth;
 
   void main() {
     // A slow, per-point drift. Barely visible on any one dot; collectively it
@@ -69,12 +72,15 @@ const vertexShader = /* glsl */ `
     // wave from flattening into one solid blob.
     vColor = mix(rest, mix(SIGNAL, SIGNAL_CORE, act * act * act), act);
     vGlow = act;
+    vViewDepth = -mv.z;
   }
 `;
 
 const fragmentShader = /* glsl */ `
+  ${MASK_FRAGMENT_GLSL}
   varying vec3 vColor;
   varying float vGlow;
+  varying float vViewDepth;
 
   void main() {
     float r = length(gl_PointCoord - 0.5) * 2.0;
@@ -85,7 +91,14 @@ const fragmentShader = /* glsl */ `
     float core = pow(max(0.0, 1.0 - r * 2.4), 3.0);
     float alpha = disc * (0.42 + 0.58 * vGlow) + core * (0.3 + 1.6 * vGlow);
 
-    gl_FragColor = vec4(vColor * (1.0 + 1.1 * vGlow), alpha);
+    outColor = vec4(vColor * (1.0 + 1.1 * vGlow), alpha);
+
+    // Gooey mask: a solid dot at the node's resting size. The sprite grows
+    // up to 4.2x when firing; measuring against the unswollen size keeps
+    // firing nodes from ballooning into the cells around them.
+    float body = 0.55 / (1.0 + 3.2 * vGlow);
+    float coverage = 1.0 - smoothstep(0.7 * body, body, r);
+    outMask = encodeMask(coverage, vViewDepth, vGlow);
   }
 `;
 
@@ -100,7 +113,7 @@ export class NodeLayer {
   private glow: BufferAttribute;
   private sim: NetworkSim;
 
-  constructor(graph: NetworkGraph, sim: NetworkSim, options: NodeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, sim: NetworkSim, mask: MaskUniforms, options: NodeLayerOptions = {}) {
     const { size = 4.8 } = options;
     const n = graph.nodeCount;
     this.sim = sim;
@@ -138,7 +151,9 @@ export class NodeLayer {
         .replace(/SIGNAL/g, glslColor(signal))
         .replace(/GLOW_FLOOR/g, GLOW_FLOOR.toFixed(6)),
       fragmentShader,
+      glslVersion: GLSL3,
       uniforms: {
+        ...mask,
         uSize: { value: size },
         uViewportScale: { value: 1 },
         uTime: { value: 0 },
