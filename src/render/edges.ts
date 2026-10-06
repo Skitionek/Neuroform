@@ -3,59 +3,77 @@
  * near-invisible wires that only read as a mass, which is exactly what makes
  * the bright pulses legible when they run across it.
  *
- * Local synapses are an index buffer over the node layer's own attributes:
- * positions, colours and depths already live on the GPU once, so each edge
- * costs two indices instead of two copies of everything. Long-range tracts
- * are tinted differently, so they are a separate (small) mesh.
+ * One plain line draw with two vertices per synapse. Each vertex works out
+ * which synapse it belongs to from gl_VertexID, fetches both node indices from
+ * an edge texture, and both nodes from the node textures. Knowing both ends
+ * lets a synapse be placed wholly on one side of the view split, and lets
+ * long-range tracts be recognised (and tinted) by their length, so they need
+ * no mesh of their own.
+ *
+ * Not instanced on purpose: instancing a two-vertex line 340k times wastes
+ * most of every vertex batch on real GPUs, and was 18x slower here.
  */
-import {
-  AdditiveBlending,
-  BufferAttribute,
-  BufferGeometry,
-  Color,
-  Group,
-  LineSegments,
-  ShaderMaterial,
-} from 'three';
+import { AdditiveBlending, BufferGeometry, LineSegments, RGFormat, ShaderMaterial, type DataTexture } from 'three';
 import type { NetworkGraph } from '../graph/types';
-import { PALETTE, tissueColorFor } from './palette';
+import {
+  DATA_TEXTURE_WIDTH,
+  NODE_FETCH_GLSL,
+  floatTexture,
+  setPulledBounds,
+  vertexCountCarrier,
+  type NodeTextures,
+} from './node-textures';
+import { PALETTE } from './palette';
+import { SPLIT_GLSL, type SplitUniforms } from './split';
 
-/** Local synapses: colour and fade derived from the shared node attributes. */
-const localVertex = /* glsl */ `
-  attribute vec3 aTissue;
-  attribute float aDepth;
+const vertexShader = /* glsl */ `
+  ${NODE_FETCH_GLSL}
+  ${SPLIT_GLSL}
+  uniform highp sampler2D uEdges; // node indices (a, b) per synapse
+  uniform int uEdgesWidth;
+  uniform float uTractLength;
+  uniform vec3 uTractColor;
+
   varying vec3 vColor;
   varying float vFade;
 
   void main() {
-    vColor = aTissue;
+    int edge = gl_VertexID >> 1;
+    bool first = (gl_VertexID & 1) == 0;
+    vec2 ends = texelFetch(uEdges, ivec2(edge % uEdgesWidth, edge / uEdgesWidth), 0).xy;
+    vec4 a = nodePosition(ends.x);
+    vec4 b = nodePosition(ends.y);
+
+    // The midpoint decides the side, so both vertices agree.
+    if (!onDrawnSide(0.5 * (a.xyz + b.xyz))) {
+      gl_Position = CULLED;
+      return;
+    }
+
+    vec4 end = first ? a : b;
+    vec3 tissue = nodeTissue(first ? ends.x : ends.y);
+
+    // Long-range tracts carry a violet tint and stay readable, so the
+    // midline crossings read as structure rather than noise.
+    bool tract = length(b.xyz - a.xyz) > uTractLength;
+    vColor = tract ? mix(tissue, uTractColor, 0.45) : tissue;
     // Deep wires recede so the surface structure reads first.
-    vFade = 1.0 - 0.55 * aDepth;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
+    vFade = (tract ? 0.85 : 1.0) * (1.0 - 0.55 * end.w);
 
-/** Long-range tracts: colour and fade baked per vertex. */
-const tractVertex = /* glsl */ `
-  attribute vec3 aColor;
-  attribute float aFade;
-  varying vec3 vColor;
-  varying float vFade;
-
-  void main() {
-    vColor = aColor;
-    vFade = aFade;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(end.xyz, 1.0);
   }
 `;
 
 const fragmentShader = /* glsl */ `
   uniform float uOpacity;
+  uniform float uPixelScale;
   varying vec3 vColor;
   varying float vFade;
 
   void main() {
-    gl_FragColor = vec4(vColor * vFade, uOpacity * vFade);
+    // Additive blending contributes rgb * alpha, so the low-resolution
+    // compensation goes on alpha alone; on both it would apply squared.
+    gl_FragColor = vec4(vColor * vFade, uOpacity * vFade * uPixelScale);
   }
 `;
 
@@ -66,109 +84,55 @@ export interface EdgeLayerOptions {
 }
 
 export class EdgeLayer {
-  readonly object = new Group();
-  private materials: ShaderMaterial[] = [];
-  private geometries: BufferGeometry[] = [];
+  readonly lines: LineSegments;
+  private geometry: BufferGeometry;
+  private material: ShaderMaterial;
+  private edges: DataTexture;
 
-  /**
-   * @param nodes the node layer's geometry, whose position, aTissue and aDepth
-   * attributes are shared rather than copied.
-   */
-  constructor(graph: NetworkGraph, nodes: BufferGeometry, options: EdgeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, nodes: NodeTextures, split: SplitUniforms, options: EdgeLayerOptions = {}) {
     const { opacity = 0.032, tractThreshold = 0.28 } = options;
     const m = graph.edgeCount;
-    const tractLength = graph.bounds * tractThreshold;
 
-    let tracts = 0;
-    for (let e = 0; e < m; e++) if (graph.edgeLength[e] > tractLength) tracts++;
+    // Float indices are exact up to 2^24, i.e. networks of 16.7M nodes.
+    const width = Math.min(DATA_TEXTURE_WIDTH, Math.max(1, m));
+    const height = Math.max(1, Math.ceil(m / width));
+    const pairs = new Float32Array(width * height * 2);
+    pairs.set(graph.edges);
+    this.edges = floatTexture(pairs, width, height, RGFormat);
 
-    // Local synapses, indexed into the node attributes.
-    const IndexArray = graph.nodeCount <= 65535 ? Uint16Array : Uint32Array;
-    const index = new IndexArray((m - tracts) * 2);
-    // Tracts, baked.
-    const tractPositions = new Float32Array(tracts * 6);
-    const tractColors = new Float32Array(tracts * 6);
-    const tractFade = new Float32Array(tracts * 2);
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position', vertexCountCarrier(m * 2));
+    setPulledBounds(geometry, graph.bounds);
+    this.geometry = geometry;
 
-    const c = new Color();
-    let li = 0;
-    let ti = 0;
-    for (let e = 0; e < m; e++) {
-      const a = graph.edges[e * 2];
-      const b = graph.edges[e * 2 + 1];
-      if (graph.edgeLength[e] <= tractLength) {
-        index[li++] = a;
-        index[li++] = b;
-        continue;
-      }
-      for (let v = 0; v < 2; v++) {
-        const node = v === 0 ? a : b;
-        const o = (ti * 2 + v) * 3;
-        tractPositions[o] = graph.positions[node * 3];
-        tractPositions[o + 1] = graph.positions[node * 3 + 1];
-        tractPositions[o + 2] = graph.positions[node * 3 + 2];
-        // Tracts carry a violet tint and stay readable, so the midline
-        // crossings read as structure rather than noise.
-        c.copy(tissueColorFor(graph.region[node])).lerp(PALETTE.tract, 0.45);
-        tractColors[o] = c.r;
-        tractColors[o + 1] = c.g;
-        tractColors[o + 2] = c.b;
-        tractFade[ti * 2 + v] = 0.85 * (1 - 0.55 * graph.depth[node]);
-      }
-      ti++;
-    }
-
-    const local = new BufferGeometry();
-    local.setAttribute('position', nodes.getAttribute('position'));
-    local.setAttribute('aTissue', nodes.getAttribute('aTissue'));
-    local.setAttribute('aDepth', nodes.getAttribute('aDepth'));
-    local.setIndex(new BufferAttribute(index, 1));
-    this.add(local, localVertex, opacity);
-
-    if (tracts > 0) {
-      const tract = new BufferGeometry();
-      tract.setAttribute('position', new BufferAttribute(tractPositions, 3));
-      tract.setAttribute('aColor', new BufferAttribute(tractColors, 3));
-      tract.setAttribute('aFade', new BufferAttribute(tractFade, 1));
-      this.add(tract, tractVertex, opacity);
-    }
-  }
-
-  private add(geometry: BufferGeometry, vertexShader: string, opacity: number): void {
-    const material = new ShaderMaterial({
+    this.material = new ShaderMaterial({
       vertexShader,
       fragmentShader,
-      uniforms: { uOpacity: { value: opacity } },
+      uniforms: {
+        ...nodes.uniforms(),
+        ...split,
+        uEdges: { value: this.edges },
+        uEdgesWidth: { value: width },
+        uOpacity: { value: opacity },
+        uTractLength: { value: graph.bounds * tractThreshold },
+        uTractColor: { value: PALETTE.tract.clone() },
+      },
       transparent: true,
       depthWrite: false,
       blending: AdditiveBlending,
     });
-    const lines = new LineSegments(geometry, material);
-    lines.frustumCulled = false;
-    this.object.add(lines);
-    this.geometries.push(geometry);
-    this.materials.push(material);
+
+    this.lines = new LineSegments(geometry, this.material);
+    this.lines.frustumCulled = false;
   }
 
   setOpacity(value: number): void {
-    for (const m of this.materials) m.uniforms.uOpacity.value = value;
+    this.material.uniforms.uOpacity.value = value;
   }
 
-  /**
-   * Disposes the edge-only resources. The local geometry's shared node
-   * attributes are left to the node layer: disposing a geometry in three.js
-   * frees the GL buffers of every attribute on it, so the shared ones are
-   * detached first.
-   */
   dispose(): void {
-    for (const g of this.geometries) {
-      if (g.index) {
-        g.deleteAttribute('position');
-        g.deleteAttribute('aTissue');
-        g.deleteAttribute('aDepth');
-      }
-      g.dispose();
-    }
-    for (const m of this.materials) m.dispose();
+    this.geometry.dispose();
+    this.material.dispose();
+    this.edges.dispose();
   }
 }
