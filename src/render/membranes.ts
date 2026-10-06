@@ -31,7 +31,7 @@ import {
   NoBlending,
   OneFactor,
   Points,
-  RedFormat,
+  RGFormat,
   Scene,
   ShaderMaterial,
   Vector2,
@@ -43,6 +43,7 @@ import {
 } from 'three';
 import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import type { NeuronLayout } from '../graph/neurons';
+import type { DirtySet } from '../core/dirty';
 import type { NetworkSim } from '../sim/network';
 import type { GpuTimer } from './gpu-timer';
 import {
@@ -68,6 +69,9 @@ const NEAR_FADE_GLSL = /* glsl */ `
     return smoothstep(-0.02, 0.12, side);
   }
 `;
+
+/** Smallest typical cell radius, in density pixels, before resolution drops. */
+const MIN_CELL_PX = 2.5;
 
 /** Splat extent in soma radii: covers the gaussian tail plus the wobble. */
 const SPRITE = 2.6;
@@ -154,10 +158,11 @@ const somaFragment = /* glsl */ `
 
 const neuriteVertex = /* glsl */ `
   ${NODE_FETCH_GLSL}
-  uniform highp sampler2D uLinks;     // node a, node b, soma a, soma b
+  uniform highp sampler2D uLinks;     // node a, node b
   uniform int uLinksWidth;
-  uniform highp sampler2D uSomaGlow; // current glow per soma
-  uniform int uSomaGlowWidth;
+  uniform highp sampler2D uNodeGlow; // per node: peak, start time
+  uniform float uTime;
+  uniform float uGlowHalfLife;
   uniform vec2 uTargetSize;
   uniform float uRadius;
   uniform float uProjScale;
@@ -173,9 +178,12 @@ const neuriteVertex = /* glsl */ `
   varying float vGlowA;
   varying float vGlowB;
 
-  float somaGlow(float index) {
-    int i = int(index + 0.5);
-    return texelFetch(uSomaGlow, ivec2(i % uSomaGlowWidth, i / uSomaGlowWidth), 0).r;
+  // Decayed on the GPU like the somas' own glow, so the CPU never touches
+  // glow that is merely fading.
+  float nodeGlow(float index) {
+    vec2 g = texelFetch(uNodeGlow, nodeTexel(index), 0).rg;
+    float act = g.x * exp2(-max(0.0, uTime - g.y) / uGlowHalfLife);
+    return act < 0.002 ? 0.0 : min(act, 1.0);
   }
 
   // Two triangles per neurite: (t along, side across).
@@ -231,8 +239,8 @@ const neuriteVertex = /* glsl */ `
     vWidthA = ra;
     vWidthB = rb;
     vColor = mix(nodeTissue(ends.x), nodeTissue(ends.y), t);
-    vGlowA = somaGlow(link4.z);
-    vGlowB = somaGlow(link4.w);
+    vGlowA = nodeGlow(ends.x);
+    vGlowB = nodeGlow(ends.y);
   }
 `;
 
@@ -308,9 +316,11 @@ export class MembraneLayer {
   private somaMaterial: ShaderMaterial;
   private neuriteMaterial: ShaderMaterial;
   private links: DataTexture;
-  private somaGlow: DataTexture;
-  private somaGlowData: Float32Array<ArrayBuffer>;
-  private somas: Uint32Array;
+  /** sim.glow as a texture, rows re-uploaded only where something changed. */
+  private nodeGlow: DataTexture;
+  private nodeGlowData: Float32Array<ArrayBuffer>;
+  private glowDirty: DirtySet;
+  private dirtyRows: Uint8Array;
   private sim: NetworkSim;
   // Shared by both materials.
   private centre = { value: new Vector3() };
@@ -370,19 +380,16 @@ export class MembraneLayer {
     somas.frustumCulled = false;
     somaCores.frustumCulled = false;
 
-    // Glow per soma, refreshed each frame: a few hundred values, so cheap to
-    // upload, and it lets neurites light up from the cell that fired.
-    this.somas = layout.somas;
-    const somaCount = layout.somas.length;
-    const glowWidth = Math.min(DATA_TEXTURE_WIDTH, Math.max(1, somaCount));
-    const glowHeight = Math.max(1, Math.ceil(somaCount / glowWidth));
-    this.somaGlowData = new Float32Array(glowWidth * glowHeight);
-    this.somaGlow = floatTexture(this.somaGlowData, glowWidth, glowHeight, RedFormat);
-    const somaIndex = new Map<number, number>();
-    layout.somas.forEach((node, i) => somaIndex.set(node, i));
+    // Glow per node as (peak, start), laid out like the other node textures,
+    // so neurites light up from the cell that fired. Only firing changes it;
+    // the decay is worked out in the shader.
+    const glowRows = Math.max(1, Math.ceil(sim.graph.nodeCount / nodes.width));
+    this.nodeGlowData = new Float32Array(nodes.width * glowRows * 2);
+    this.nodeGlow = floatTexture(this.nodeGlowData, nodes.width, glowRows, RGFormat);
+    this.glowDirty = sim.watchGlow();
+    this.dirtyRows = new Uint8Array(glowRows);
 
-    // Neurites: pulled from a texture of (node, node, soma, soma), six
-    // vertices each.
+    // Neurites: pulled from a texture of (node, node), six vertices each.
     const linkCount = layout.links.length / 2;
     const width = Math.min(DATA_TEXTURE_WIDTH, Math.max(1, linkCount));
     const height = Math.max(1, Math.ceil(linkCount / width));
@@ -391,8 +398,6 @@ export class MembraneLayer {
       const a = layout.links[l * 2], b = layout.links[l * 2 + 1];
       links[l * 4] = a;
       links[l * 4 + 1] = b;
-      links[l * 4 + 2] = somaIndex.get(a)!;
-      links[l * 4 + 3] = somaIndex.get(b)!;
     }
     this.links = floatTexture(links, width, height);
 
@@ -408,8 +413,9 @@ export class MembraneLayer {
         ...nodes.uniforms(),
         uLinks: { value: this.links },
         uLinksWidth: { value: width },
-        uSomaGlow: { value: this.somaGlow },
-        uSomaGlowWidth: { value: glowWidth },
+        uNodeGlow: { value: this.nodeGlow },
+        uTime: { value: 0 },
+        uGlowHalfLife: { value: 0.65 },
         uTargetSize: { value: new Vector2(1, 1) },
         uRadius: { value: radius },
         uProjScale: { value: 1 },
@@ -434,10 +440,22 @@ export class MembraneLayer {
     this.cellZoom = cellZoom;
   }
 
-  /** Radius for a camera `distance` from the brain's centre. */
-  private applyRadius(distance: number): void {
+  /** Cell radius in model units for a camera `distance` from the brain's centre. */
+  private radiusAt(distance: number): number {
     const zoom = Math.max(distance, 1e-3) / this.referenceDistance;
-    const radius = this.baseRadius * Math.pow(zoom, this.cellZoom);
+    return this.baseRadius * Math.pow(zoom, this.cellZoom);
+  }
+
+  /** Typical cell radius on screen, in pixels of a target `height` tall. */
+  typicalRadiusPx(camera: PerspectiveCamera, height: number): number {
+    const distance = Math.max(0.05, camera.position.distanceTo(this.centre.value));
+    const projScale = camera.projectionMatrix.elements[5] * 0.5 * height;
+    // 1.2: the mean of the per-cell size spread, 0.9 + 0.6 * seed.
+    return (1.2 * this.radiusAt(distance) * projScale) / distance;
+  }
+
+  private applyRadius(distance: number): void {
+    const radius = this.radiusAt(distance);
     this.somaMaterial.uniforms.uRadius.value = radius;
     this.neuriteMaterial.uniforms.uRadius.value = radius;
     // Blobs this close in depth merge; anything further behind is hidden.
@@ -445,7 +463,7 @@ export class MembraneLayer {
   }
 
   /** Per-frame uniforms, for a density target `width` x `height` pixels. */
-  update(camera: PerspectiveCamera, width: number, height: number): void {
+  update(renderer: WebGLRenderer, camera: PerspectiveCamera, width: number, height: number): void {
     // Pixels per model unit at unit distance, for this target.
     const projScale = camera.projectionMatrix.elements[5] * 0.5 * height;
     const s = this.somaMaterial.uniforms;
@@ -454,23 +472,61 @@ export class MembraneLayer {
     s.uProjScale.value = projScale;
     const n = this.neuriteMaterial.uniforms;
     n.uProjScale.value = projScale;
+    n.uTime.value = s.uTime.value;
+    n.uGlowHalfLife.value = s.uGlowHalfLife.value;
     this.viewDir.value.copy(camera.position).sub(this.centre.value);
     this.applyRadius(this.viewDir.value.length());
     this.viewDir.value.normalize();
 
-    let lit = false;
-    for (let i = 0; i < this.somas.length; i++) {
-      const g = this.sim.glowAt(this.somas[i]);
-      if (g !== this.somaGlowData[i]) {
-        this.somaGlowData[i] = g;
-        lit = true;
-      }
-    }
-    if (lit) this.somaGlow.needsUpdate = true;
+    this.uploadGlow(renderer);
     (n.uTargetSize.value as Vector2).set(width, height);
   }
 
+  /** Copies changed rows of sim.glow into the texture and uploads just those. */
+  private uploadGlow(renderer: WebGLRenderer): void {
+    const width = this.nodeGlow.image.width;
+    const rows = this.dirtyRows;
+    const result = this.glowDirty.drain((first, count) => {
+      const last = Math.floor((first + count - 1) / width);
+      for (let r = Math.floor(first / width); r <= last; r++) rows[r] = 1;
+    });
+    if (result === 'none') return;
+    const src = this.sim.glow;
+    const data = this.nodeGlowData;
+    if (result === 'all') {
+      rows.fill(0);
+      data.set(src);
+      this.nodeGlow.needsUpdate = true;
+      return;
+    }
+
+    // Before its first upload, three.js will send the whole array anyway.
+    const props = renderer.properties.get(this.nodeGlow) as { __webglTexture?: WebGLTexture; __version?: number };
+    const uploaded = props.__webglTexture !== undefined && props.__version === this.nodeGlow.version;
+    const gl = renderer.getContext() as WebGL2RenderingContext;
+    if (uploaded) {
+      renderer.state.bindTexture(gl.TEXTURE_2D, props.__webglTexture!);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    }
+    for (let r = 0; r < rows.length; r++) {
+      if (!rows[r]) continue;
+      let end = r;
+      while (end + 1 < rows.length && rows[end + 1]) end++;
+      const from = r * width * 2;
+      const to = Math.min(src.length, (end + 1) * width * 2);
+      data.set(src.subarray(from, to), from);
+      if (uploaded) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r, width, end - r + 1, gl.RG, gl.FLOAT, data, from);
+      }
+      rows.fill(0, r, end + 1);
+      r = end;
+    }
+  }
+
   dispose(): void {
+    this.sim.unwatchGlow(this.glowDirty);
     // The node attributes belong to the node layer: detach before disposing,
     // or three.js frees their GPU buffers along with this geometry.
     for (const name of ['position', 'aGlow', 'aTissue', 'aSeed', 'aDepth']) this.somaGeometry.deleteAttribute(name);
@@ -481,7 +537,7 @@ export class MembraneLayer {
     this.somaDepthMaterial.dispose();
     this.neuriteDepthMaterial.dispose();
     this.links.dispose();
-    this.somaGlow.dispose();
+    this.nodeGlow.dispose();
   }
 }
 
@@ -493,6 +549,10 @@ export class MembranePass extends Pass {
   private density: WebGLRenderTarget;
   private quad: FullScreenQuad;
   private clearColor = new Color();
+  private fullWidth = 1;
+  private fullHeight = 1;
+  /** Density resolution as a share of the frame's. */
+  private scale = 1;
 
   constructor(camera: Camera, timer: GpuTimer) {
     super();
@@ -526,10 +586,45 @@ export class MembranePass extends Pass {
   }
 
   setSize(width: number, height: number): void {
-    // Full resolution: cells can be only a few pixels across, and at half
-    // resolution small ones alias or fall below the threshold.
-    this.density.setSize(Math.max(1, width), Math.max(1, height));
+    this.fullWidth = Math.max(1, width);
+    this.fullHeight = Math.max(1, height);
+    this.resizeDensity();
   }
+
+  private resizeDensity(): void {
+    this.density.setSize(
+      Math.max(1, Math.round(this.fullWidth * this.scale)),
+      Math.max(1, Math.round(this.fullHeight * this.scale)),
+    );
+  }
+
+  /**
+   * Density is a smooth field and the threshold is applied after it is
+   * upsampled, so edges stay crisp at reduced resolution as long as cells
+   * stay a few density pixels across; small ones alias or drop below the
+   * threshold. So the resolution is the lowest (down to half, a quarter of
+   * the pixels) that keeps a typical cell MIN_CELL_PX in radius, in steps
+   * of 1/8 so zooming does not reallocate the target every frame.
+   */
+  private fitScale(layer: MembraneLayer): void {
+    const radius = layer.typicalRadiusPx(this.camera, this.fullHeight);
+    const wanted = Math.min(1, Math.max(0.5, MIN_CELL_PX / Math.max(radius, 1e-3)));
+    const scale = Math.ceil(wanted * 8) / 8;
+    if (scale !== this.scale) {
+      this.scale = scale;
+      this.resizeDensity();
+    }
+  }
+
+  /** Pins the density resolution (a share of the frame's); null fits it to the cells. */
+  setResolution(scale: number | null): void {
+    this.fixedScale = scale !== null;
+    if (scale !== null && scale !== this.scale) {
+      this.scale = Math.min(1, Math.max(0.25, scale));
+      this.resizeDensity();
+    }
+  }
+  private fixedScale = false;
 
   /** How bright the cells' interiors and membranes are. */
   setBrightness(body: number, rim: number): void {
@@ -541,7 +636,8 @@ export class MembranePass extends Pass {
   render(renderer: WebGLRenderer, _writeBuffer: WebGLRenderTarget, readBuffer: WebGLRenderTarget): void {
     if (!this.layer) return;
     this.timer.begin('membranes');
-    this.layer.update(this.camera, this.density.width, this.density.height);
+    if (!this.fixedScale) this.fitScale(this.layer);
+    this.layer.update(renderer, this.camera, this.density.width, this.density.height);
 
     const autoClear = renderer.autoClear;
     renderer.autoClear = false;

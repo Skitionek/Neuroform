@@ -238,6 +238,8 @@ export class NetworkSim {
   readonly glow: Float32Array;
   /** Nodes whose glow entry changed since the last upload. */
   readonly glowDirty: DirtySet;
+  /** Further consumers of glow changes, each draining its own set. */
+  private glowWatchers: DirtySet[] = [];
   readonly pulses: PulsePool;
 
   private charge: Float32Array;
@@ -261,6 +263,22 @@ export class NetworkSim {
     this.chargeAt = new Float32Array(n);
     this.lastFire = new Float32Array(n).fill(-1e9);
     this.pulses = new PulsePool(Math.max(1024, params.maxPulses));
+  }
+
+  /** A DirtySet of glow changes for another GPU copy of `glow`; starts all-dirty. */
+  watchGlow(): DirtySet {
+    const set = new DirtySet(this.graph.nodeCount);
+    this.glowWatchers.push(set);
+    return set;
+  }
+
+  unwatchGlow(set: DirtySet): void {
+    this.glowWatchers = this.glowWatchers.filter((s) => s !== set);
+  }
+
+  private markAllGlow(): void {
+    this.glowDirty.markAll();
+    for (const set of this.glowWatchers) set.markAll();
   }
 
   /** Current sim time. Rebased periodically; only differences are meaningful. */
@@ -291,7 +309,7 @@ export class NetworkSim {
     this.chargeAt.fill(0);
     this.lastFire.fill(-1e9);
     this.glow.fill(0);
-    this.glowDirty.markAll();
+    this.markAllGlow();
     this.pulses.clear();
     this.stats.firings = 0;
     this.stats.pulses = 0;
@@ -308,6 +326,7 @@ export class NetworkSim {
     this.glow[node * 2] = value;
     this.glow[node * 2 + 1] = this.time;
     this.glowDirty.mark(node);
+    for (const set of this.glowWatchers) set.mark(node);
   }
 
   private fire(node: number, amplitude: number): void {
@@ -413,7 +432,7 @@ export class NetworkSim {
       this.chargeAt[i] -= offset;
       this.lastFire[i] -= offset;
     }
-    this.glowDirty.markAll();
+    this.markAllGlow();
     this.pulses.shiftTime(offset);
   }
 }
