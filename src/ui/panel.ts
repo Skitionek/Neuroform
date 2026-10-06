@@ -59,7 +59,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
 
   const structure = gui.addFolder('structure');
   const s = state.structure;
-  structure.add(s, 'nodes', 2000, 120000, 1000);
+  structure.add(s, 'nodes', 2000, 200000, 1000);
   structure.add(s, 'seed', 1, 999, 1);
   structure.add(s, 'foldDepth', 0, 0.08, 0.001).name('fold depth');
   structure.add(s, 'foldScale', 2, 16, 0.1).name('fold scale');
