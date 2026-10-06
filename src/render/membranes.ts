@@ -7,6 +7,12 @@
  *    slow harmonics of angle (the morphing border-radius blob); each neurite
  *    is a soft tube, thick where it meets a soma and thin in the middle.
  *    Densities add, so where a neurite meets its soma they sum into a neck.
+ *    The merge is depth-aware: a pre-pass writes the depth of each blob's
+ *    solid core, and the density pass is depth-tested against it with a
+ *    small slack, so only blobs within about two cell radii of the nearest
+ *    surface add up. Without it, nodes at different depths that merely
+ *    overlap on screen fused into solid lace wherever the shell is seen
+ *    edge-on. (The visibility pass of point-based surface splatting.)
  * 2. A full-screen pass thresholds that density the way the CSS matrix does
  *    (alpha' = 18a - 6, a ramp from a = 1/3 to ~0.39) and lights a rim just
  *    inside the edge, so each cell reads as a membrane. The result is added
@@ -19,8 +25,10 @@ import {
   CustomBlending,
   DataTexture,
   HalfFloatType,
+  LessEqualDepth,
   LinearFilter,
   Mesh,
+  NoBlending,
   OneFactor,
   Points,
   RedFormat,
@@ -67,6 +75,10 @@ const LN3 = Math.log(3).toFixed(6);
 
 // Density sums with plain addition; colour is premultiplied by density.
 const additive = { blending: CustomBlending, blendSrc: OneFactor, blendDst: OneFactor, depthTest: false, depthWrite: false, transparent: true } as const;
+/** Density: summed, but only near the front surface laid down by the pre-pass. */
+const densityParams = { ...additive, depthTest: true, depthFunc: LessEqualDepth } as const;
+/** Depth pre-pass: opaque, depth only. */
+const depthParams = { blending: NoBlending, colorWrite: false, depthTest: true, depthWrite: true, transparent: false, defines: { DEPTH_PREPASS: '' } } as const;
 
 const somaVertex = /* glsl */ `
   attribute vec2 aGlow;
@@ -79,6 +91,7 @@ const somaVertex = /* glsl */ `
   uniform float uProjScale;
   uniform vec3 uCentre;
   uniform vec3 uViewDir;
+  uniform float uDepthSlack;
   varying vec3 vColor;
   varying float vSeed;
   varying float vFade;
@@ -89,12 +102,20 @@ const somaVertex = /* glsl */ `
     vFade = nearFade(position);
     if (vFade <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_Position = projectionMatrix * mv;
+    vec4 placed = mv;
+    #ifndef DEPTH_PREPASS
+    // Pulled toward the camera by the slack, so the depth test keeps this
+    // splat if it lies within the slack behind the front surface.
+    placed.z += uDepthSlack;
+    #endif
+    gl_Position = projectionMatrix * placed;
     float act = aGlow.x * exp2(-max(0.0, uTime - aGlow.y) / uGlowHalfLife);
     act = act < 0.002 ? 0.0 : min(act, 1.0);
     // Cells vary in size, and swell a little when they fire.
     float r = uRadius * (0.9 + 0.6 * aSeed) * (1.0 + 0.3 * act);
-    gl_PointSize = 2.0 * ${SPRITE.toFixed(2)} * r * uProjScale / max(0.05, -mv.z);
+    // At least ~1.5 px across, so small distant cells stay visible.
+    float rPx = max(r * uProjScale / max(0.05, -mv.z), 0.75);
+    gl_PointSize = 2.0 * ${SPRITE.toFixed(2)} * rPx;
     vColor = mix(aTissue * (0.8 + 0.4 * (1.0 - aDepth)), SIGNAL, act);
     vSeed = aSeed;
   }
@@ -120,8 +141,14 @@ const somaFragment = /* glsl */ `
     // The fade scales density, so a cell shrinks below threshold smoothly
     // rather than popping out.
     float d = exp(-(r * r) / (m * m) * ${LN3}) * vFade;
+    #ifdef DEPTH_PREPASS
+    // Only the solid core occludes: where this blob alone passes threshold.
+    if (d < 0.334) discard;
+    gl_FragColor = vec4(0.0);
+    #else
     if (d < 0.004) discard;
     gl_FragColor = vec4(vColor * d, d);
+    #endif
   }
 `;
 
@@ -136,6 +163,7 @@ const neuriteVertex = /* glsl */ `
   uniform float uProjScale;
   uniform vec3 uCentre;
   uniform vec3 uViewDir;
+  uniform float uDepthSlack;
   varying float vFade;
   varying float vT;
   varying float vAcross;
@@ -169,6 +197,10 @@ const neuriteVertex = /* glsl */ `
     if (vFade <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     vec4 va = modelViewMatrix * vec4(a, 1.0);
     vec4 vb = modelViewMatrix * vec4(b, 1.0);
+    #ifndef DEPTH_PREPASS
+    va.z += uDepthSlack;
+    vb.z += uDepthSlack;
+    #endif
     if (va.z > -0.05 || vb.z > -0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
 
     vec4 ca = projectionMatrix * va;
@@ -183,8 +215,10 @@ const neuriteVertex = /* glsl */ `
 
     // Tube radius in pixels where it meets each soma: a third of the cell
     // body, so the body reads as a bulb the neurites grow out of.
-    float ra = 0.32 * uRadius * uProjScale / -va.z;
-    float rb = 0.32 * uRadius * uProjScale / -vb.z;
+    // Never under ~0.6 px, or thin links between small cells drop below the
+    // threshold and the cells stop joining up.
+    float ra = max(0.32 * uRadius * uProjScale / -va.z, 0.6);
+    float rb = max(0.32 * uRadius * uProjScale / -vb.z, 0.6);
     float span = 2.4 * max(ra, rb); // covers the cross-section's tail
 
     float t = corner.x;
@@ -217,6 +251,11 @@ const neuriteFragment = /* glsl */ `
     float ends = mix(vWidthA, vWidthB, vT);
     float w = ends * mix(1.0, 0.5, 4.0 * vT * (1.0 - vT));
     float d = exp(-(vAcross * vAcross) / (w * w) * ${LN3}) * 1.15 * vFade;
+    #ifdef DEPTH_PREPASS
+    if (d < 0.334) discard;
+    gl_FragColor = vec4(0.0);
+    return;
+    #endif
     if (d < 0.004) discard;
     // A firing soma lights its neurites, fading along them from its end.
     float glow = max(vGlowA * (1.0 - vT) * (1.0 - vT), vGlowB * vT * vT);
@@ -250,7 +289,13 @@ export interface MembraneOptions {
 
 /** Somas and neurites for one network and one neuron layout. */
 export class MembraneLayer {
+  /** Density pass. */
   readonly scene = new Scene();
+  /** Depth pre-pass: the same geometry, opaque cores only. */
+  readonly depthScene = new Scene();
+  private somaDepthMaterial: ShaderMaterial;
+  private neuriteDepthMaterial: ShaderMaterial;
+  private depthSlack = { value: 0 };
   private somaGeometry: BufferGeometry;
   private neuriteGeometry: BufferGeometry;
   private somaMaterial: ShaderMaterial;
@@ -276,7 +321,7 @@ export class MembraneLayer {
     options: MembraneOptions = {},
   ) {
     this.sim = sim;
-    const radius = options.cellSize ?? 0.006;
+    const radius = options.cellSize ?? 0.0018;
     nodeGeometry.computeBoundingSphere();
     this.centre.value.copy(nodeGeometry.boundingSphere!.center);
     const signal = PALETTE.signal;
@@ -290,9 +335,11 @@ export class MembraneLayer {
     setPulledBounds(somaGeometry, sim.graph.bounds);
     this.somaGeometry = somaGeometry;
 
-    this.somaMaterial = new ShaderMaterial({
+    this.depthSlack.value = 2.2 * radius;
+    const somaShader = {
       vertexShader: somaVertex.replace(/SIGNAL/g, `vec3(${signal.r.toFixed(4)}, ${signal.g.toFixed(4)}, ${signal.b.toFixed(4)})`),
       fragmentShader: somaFragment,
+      // One uniforms object, shared by the density and depth materials.
       uniforms: {
         uTime: { value: 0 },
         uGlowHalfLife: { value: 0.65 },
@@ -300,11 +347,15 @@ export class MembraneLayer {
         uProjScale: { value: 1 },
         uCentre: this.centre,
         uViewDir: this.viewDir,
+        uDepthSlack: this.depthSlack,
       },
-      ...additive,
-    });
+    };
+    this.somaMaterial = new ShaderMaterial({ ...somaShader, ...densityParams });
+    this.somaDepthMaterial = new ShaderMaterial({ ...somaShader, ...depthParams });
     const somas = new Points(somaGeometry, this.somaMaterial);
+    const somaCores = new Points(somaGeometry, this.somaDepthMaterial);
     somas.frustumCulled = false;
+    somaCores.frustumCulled = false;
 
     // Glow per soma, refreshed each frame: a few hundred values, so cheap to
     // upload, and it lets neurites light up from the cell that fired.
@@ -337,7 +388,7 @@ export class MembraneLayer {
     setPulledBounds(neuriteGeometry, sim.graph.bounds);
     this.neuriteGeometry = neuriteGeometry;
 
-    this.neuriteMaterial = new ShaderMaterial({
+    const neuriteShader = {
       vertexShader: neuriteVertex,
       fragmentShader: neuriteFragment.replace(/SIGNAL/g, `vec3(${signal.r.toFixed(4)}, ${signal.g.toFixed(4)}, ${signal.b.toFixed(4)})`),
       uniforms: {
@@ -351,18 +402,25 @@ export class MembraneLayer {
         uProjScale: { value: 1 },
         uCentre: this.centre,
         uViewDir: this.viewDir,
+        uDepthSlack: this.depthSlack,
       },
-      ...additive,
-    });
+    };
+    this.neuriteMaterial = new ShaderMaterial({ ...neuriteShader, ...densityParams });
+    this.neuriteDepthMaterial = new ShaderMaterial({ ...neuriteShader, ...depthParams });
     const neurites = new Mesh(neuriteGeometry, this.neuriteMaterial);
+    const neuriteCores = new Mesh(neuriteGeometry, this.neuriteDepthMaterial);
     neurites.frustumCulled = false;
+    neuriteCores.frustumCulled = false;
 
     this.scene.add(neurites, somas);
+    this.depthScene.add(neuriteCores, somaCores);
   }
 
   setCellSize(radius: number): void {
     this.somaMaterial.uniforms.uRadius.value = radius;
     this.neuriteMaterial.uniforms.uRadius.value = radius;
+    // Blobs this close in depth merge; anything further behind is hidden.
+    this.depthSlack.value = 2.2 * radius;
   }
 
   /** Per-frame uniforms, for a density target `width` x `height` pixels. */
@@ -397,6 +455,8 @@ export class MembraneLayer {
     this.neuriteGeometry.dispose();
     this.somaMaterial.dispose();
     this.neuriteMaterial.dispose();
+    this.somaDepthMaterial.dispose();
+    this.neuriteDepthMaterial.dispose();
     this.links.dispose();
     this.somaGlow.dispose();
   }
@@ -420,7 +480,7 @@ export class MembranePass extends Pass {
       type: HalfFloatType,
       minFilter: LinearFilter,
       magFilter: LinearFilter,
-      depthBuffer: false,
+      depthBuffer: true,
     });
     this.quad = new FullScreenQuad(
       new ShaderMaterial({
@@ -443,9 +503,9 @@ export class MembranePass extends Pass {
   }
 
   setSize(width: number, height: number): void {
-    // Half resolution: density is smooth by construction, and bilinear
-    // upsampling keeps the thresholded edge smooth too.
-    this.density.setSize(Math.max(1, Math.round(width / 2)), Math.max(1, Math.round(height / 2)));
+    // Full resolution: cells can be only a few pixels across, and at half
+    // resolution small ones alias or fall below the threshold.
+    this.density.setSize(Math.max(1, width), Math.max(1, height));
   }
 
   /** How bright the cells' interiors and membranes are. */
@@ -467,7 +527,8 @@ export class MembranePass extends Pass {
 
     renderer.setRenderTarget(this.density);
     renderer.setClearColor(0x000000, 0);
-    renderer.clear();
+    renderer.clear(true, true, false);
+    renderer.render(this.layer.depthScene, this.camera);
     renderer.render(this.layer.scene, this.camera);
 
     renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
