@@ -61,7 +61,7 @@ export const DEFAULT_PARAMS: SimParams = {
   // past the cloud's own diameter.
   range: 2.75,
   glow: 0.65,
-  spontaneous: 0.7,
+  spontaneous: 0.5,
   shimmer: 140,
   maxPulses: 24000,
 };
