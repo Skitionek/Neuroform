@@ -1,8 +1,6 @@
 /**
- * Per-node data as float textures, so line instances (synapses and pulses)
- * can look up both of their endpoints in the vertex shader. Knowing both ends
- * is what lets a whole synapse be assigned to one side of the view split
- * instead of being torn across it.
+ * Per-node data as float textures, so synapses and pulses can look up both
+ * of their endpoints in the vertex shader.
  */
 import {
   BufferAttribute,

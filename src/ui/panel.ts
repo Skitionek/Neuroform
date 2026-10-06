@@ -37,8 +37,6 @@ export interface LookSettings {
   autoRotate: boolean;
   /** Frame rate while nothing fast is happening; 0 renders every frame. */
   restFps: number;
-  /** Resolution of the half of the brain behind its centre; 1 is full. */
-  farResolution: number;
 }
 
 export interface PanelHandlers {
@@ -97,7 +95,6 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'bloom', 0, 2, 0.02);
   look.add(l, 'autoRotate').name('drift');
   look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
-  look.add(l, 'farResolution', 0.25, 1, 0.05).name('far half resolution');
   look.onChange(() => handlers.onLookChange());
 
   gui.add({ fire: () => handlers.onStimulate() }, 'fire').name('fire a node');

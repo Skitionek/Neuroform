@@ -6,9 +6,8 @@
  * One plain line draw with two vertices per synapse. Each vertex works out
  * which synapse it belongs to from gl_VertexID, fetches both node indices from
  * an edge texture, and both nodes from the node textures. Knowing both ends
- * lets a synapse be placed wholly on one side of the view split, and lets
- * long-range tracts be recognised (and tinted) by their length, so they need
- * no mesh of their own.
+ * lets long-range tracts be recognised (and tinted) by their length, so they
+ * need no mesh of their own.
  *
  * Not instanced on purpose: instancing a two-vertex line 340k times wastes
  * most of every vertex batch on real GPUs, and was 18x slower here.
@@ -24,11 +23,9 @@ import {
   type NodeTextures,
 } from './node-textures';
 import { PALETTE } from './palette';
-import { SPLIT_GLSL, type SplitUniforms } from './split';
 
 const vertexShader = /* glsl */ `
   ${NODE_FETCH_GLSL}
-  ${SPLIT_GLSL}
   uniform highp sampler2D uEdges; // node indices (a, b) per synapse
   uniform int uEdgesWidth;
   uniform float uTractLength;
@@ -43,12 +40,6 @@ const vertexShader = /* glsl */ `
     vec2 ends = texelFetch(uEdges, ivec2(edge % uEdgesWidth, edge / uEdgesWidth), 0).xy;
     vec4 a = nodePosition(ends.x);
     vec4 b = nodePosition(ends.y);
-
-    // The midpoint decides the side, so both vertices agree.
-    if (!onDrawnSide(0.5 * (a.xyz + b.xyz))) {
-      gl_Position = CULLED;
-      return;
-    }
 
     vec4 end = first ? a : b;
     vec3 tissue = nodeTissue(first ? ends.x : ends.y);
@@ -66,14 +57,11 @@ const vertexShader = /* glsl */ `
 
 const fragmentShader = /* glsl */ `
   uniform float uOpacity;
-  uniform float uPixelScale;
   varying vec3 vColor;
   varying float vFade;
 
   void main() {
-    // Additive blending contributes rgb * alpha, so the low-resolution
-    // compensation goes on alpha alone; on both it would apply squared.
-    gl_FragColor = vec4(vColor * vFade, uOpacity * vFade * uPixelScale);
+    gl_FragColor = vec4(vColor * vFade, uOpacity * vFade);
   }
 `;
 
@@ -89,7 +77,7 @@ export class EdgeLayer {
   private material: ShaderMaterial;
   private edges: DataTexture;
 
-  constructor(graph: NetworkGraph, nodes: NodeTextures, split: SplitUniforms, options: EdgeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, nodes: NodeTextures, options: EdgeLayerOptions = {}) {
     const { opacity = 0.032, tractThreshold = 0.28 } = options;
     const m = graph.edgeCount;
 
@@ -110,7 +98,6 @@ export class EdgeLayer {
       fragmentShader,
       uniforms: {
         ...nodes.uniforms(),
-        ...split,
         uEdges: { value: this.edges },
         uEdgesWidth: { value: width },
         uOpacity: { value: opacity },

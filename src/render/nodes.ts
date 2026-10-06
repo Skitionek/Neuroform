@@ -20,10 +20,8 @@ import { uploadDirty } from '../core/dirty';
 import type { NetworkGraph } from '../graph/types';
 import { GLOW_FLOOR, type NetworkSim } from '../sim/network';
 import { PALETTE, tissueColorFor } from './palette';
-import { SPLIT_GLSL, type SplitUniforms } from './split';
 
 const vertexShader = /* glsl */ `
-  ${SPLIT_GLSL}
   attribute float aDepth;
   attribute vec2 aGlow;
   attribute float aSeed;
@@ -41,11 +39,6 @@ const vertexShader = /* glsl */ `
   varying float vGlow;
 
   void main() {
-    if (!onDrawnSide(position)) {
-      gl_Position = CULLED;
-      return;
-    }
-
     // A slow, per-point drift. Barely visible on any one dot; collectively it
     // keeps the mass from looking like a frozen render.
     float phase = aSeed * 6.2831853;
@@ -68,8 +61,7 @@ const vertexShader = /* glsl */ `
     // the cloud looks the same on a laptop and on a phone.
     float depthFade = mix(1.0, 0.42, aDepth);
     float size = uSize * depthFade * (0.72 + 0.5 * aSeed) * (1.0 + 3.2 * act);
-    // uPixelScale keeps the apparent size when drawing into a smaller target.
-    gl_PointSize = clamp(size * uViewportScale * uPixelScale / max(0.08, -mv.z), 0.6, 96.0);
+    gl_PointSize = clamp(size * uViewportScale / max(0.08, -mv.z), 0.6, 96.0);
 
     vec3 rest = aTissue * (0.55 + 0.45 * (1.0 - aDepth)) * uDim;
     // Cubic on the white mix: a firing node reaches cyan quickly but only
@@ -108,7 +100,7 @@ export class NodeLayer {
   private glow: BufferAttribute;
   private sim: NetworkSim;
 
-  constructor(graph: NetworkGraph, sim: NetworkSim, split: SplitUniforms, options: NodeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, sim: NetworkSim, options: NodeLayerOptions = {}) {
     const { size = 4.8 } = options;
     const n = graph.nodeCount;
     this.sim = sim;
@@ -147,7 +139,6 @@ export class NodeLayer {
         .replace(/GLOW_FLOOR/g, GLOW_FLOOR.toFixed(6)),
       fragmentShader,
       uniforms: {
-        ...split,
         uSize: { value: size },
         uViewportScale: { value: 1 },
         uTime: { value: 0 },

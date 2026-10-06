@@ -23,8 +23,7 @@ import { DEFAULT_PARAMS, NetworkSim } from './sim/network';
 import { EdgeLayer } from './render/edges';
 import { GpuTimer, type TimerMode } from './render/gpu-timer';
 import { NodeTextures } from './render/node-textures';
-import { SplitScenePass } from './render/scene-pass';
-import { createSplitUniforms } from './render/split';
+import { ScenePass } from './render/scene-pass';
 import { NodeLayer } from './render/nodes';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
@@ -67,10 +66,6 @@ const state: PanelState = {
     bloom: 0.45,
     autoRotate: true,
     restFps: 20,
-    // Off by default: in measurements so far the split's extra vertex work and
-    // passes outweighed its fill savings. Worth trying where fill dominates
-    // (high-DPI screens, large points); measure with ?gpu=1.
-    farResolution: 1,
   },
 };
 
@@ -136,11 +131,8 @@ const timerMode: TimerMode = gpuParam === 'finish' ? 'finish' : gpuParam ? 'quer
 const gpuTimer = new GpuTimer(renderer.getContext() as WebGL2RenderingContext, timerMode);
 const gpuReadout = document.querySelector<HTMLElement>('#gpu-text')!;
 
-/** Shared by every layer's material; the scene pass flips it per half. */
-const split = createSplitUniforms();
-
 const composer = new EffectComposer(renderer);
-const scenePass = new SplitScenePass(scene, camera, split, gpuTimer);
+const scenePass = new ScenePass(scene, camera, gpuTimer);
 composer.addPass(scenePass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
@@ -230,16 +222,14 @@ async function build(): Promise<void> {
   sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
 
   nodeTextures = new NodeTextures(graph);
-  nodeLayer = new NodeLayer(graph, sim, split, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, nodeTextures, split, { opacity: state.look.edgeOpacity });
-  pulseLayer = new PulseLayer(sim, nodeTextures, split, {
+  nodeLayer = new NodeLayer(graph, sim, { size: state.look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeTextures, { opacity: state.look.edgeOpacity });
+  pulseLayer = new PulseLayer(sim, nodeTextures, {
     cometLength: state.look.cometLength,
     intensity: state.look.pulseIntensity,
   });
   picker = new NodePicker(graph.positions, graph.nodeCount);
   world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
-  // The view split passes through the middle of the cloud.
-  split.uSplitCentre.value.copy(nodeLayer.geometry.boundingSphere!.center);
   scenePass.layers = [
     { label: 'synapses', object: edgeLayer.lines },
     { label: 'points', object: nodeLayer.points },
@@ -271,7 +261,6 @@ function applyLook(): void {
   pulseLayer.setCometLength(look.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
-  scenePass.farScale = look.farResolution;
   wake();
 }
 
@@ -471,7 +460,7 @@ declare global {
     neuroform: {
       stimulate(node?: number): void;
       reset(): void;
-      /** Changes look settings, e.g. `look({ bloom: 1, farResolution: 1 })`. */
+      /** Changes look settings, e.g. `look({ bloom: 1, restFps: 30 })`. */
       look(changes: Partial<PanelState['look']>): void;
       /** Rebuilds the network, optionally changing structure settings first. */
       rebuild(structure?: Partial<PanelState['structure']>): Promise<void>;
