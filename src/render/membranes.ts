@@ -1,0 +1,486 @@
+/**
+ * Neurons as soft, merging cells: the WebGL form of the CSS "gooey" recipe
+ * (blur, then threshold alpha with feColorMatrix "... 0 0 0 18 -6").
+ *
+ * 1. Somas and neurites are drawn as soft density into a half-resolution
+ *    buffer. Each soma is a gaussian splat whose radius wobbles with a few
+ *    slow harmonics of angle (the morphing border-radius blob); each neurite
+ *    is a soft tube, thick where it meets a soma and thin in the middle.
+ *    Densities add, so where a neurite meets its soma they sum into a neck.
+ * 2. A full-screen pass thresholds that density the way the CSS matrix does
+ *    (alpha' = 18a - 6, a ramp from a = 1/3 to ~0.39) and lights a rim just
+ *    inside the edge, so each cell reads as a membrane. The result is added
+ *    over the scene before bloom, so firing cells glow.
+ */
+import {
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  CustomBlending,
+  DataTexture,
+  HalfFloatType,
+  LinearFilter,
+  Mesh,
+  OneFactor,
+  Points,
+  RedFormat,
+  Scene,
+  ShaderMaterial,
+  Vector2,
+  Vector3,
+  WebGLRenderTarget,
+  type Camera,
+  type PerspectiveCamera,
+  type WebGLRenderer,
+} from 'three';
+import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
+import type { NeuronLayout } from '../graph/neurons';
+import type { NetworkSim } from '../sim/network';
+import type { GpuTimer } from './gpu-timer';
+import {
+  DATA_TEXTURE_WIDTH,
+  NODE_FETCH_GLSL,
+  floatTexture,
+  setPulledBounds,
+  vertexCountCarrier,
+  type NodeTextures,
+} from './node-textures';
+import { PALETTE } from './palette';
+
+/**
+ * Cells are drawn only on the half of the brain facing the camera. The
+ * gooey threshold works in screen space, so cells on the far side would fuse
+ * with the near ones through the brain; instead they fade out toward the
+ * plane through the centre. The fade is on density, so a cell shrinks below
+ * the threshold smoothly as the brain turns rather than popping out.
+ */
+const NEAR_FADE_GLSL = /* glsl */ `
+  float nearFade(vec3 p) {
+    float side = dot(p - uCentre, uViewDir);
+    return smoothstep(-0.02, 0.12, side);
+  }
+`;
+
+/** Splat extent in soma radii: covers the gaussian tail plus the wobble. */
+const SPRITE = 2.6;
+const LN3 = Math.log(3).toFixed(6);
+
+// Density sums with plain addition; colour is premultiplied by density.
+const additive = { blending: CustomBlending, blendSrc: OneFactor, blendDst: OneFactor, depthTest: false, depthWrite: false, transparent: true } as const;
+
+const somaVertex = /* glsl */ `
+  attribute vec2 aGlow;
+  attribute vec3 aTissue;
+  attribute float aSeed;
+  attribute float aDepth;
+  uniform float uTime;
+  uniform float uGlowHalfLife;
+  uniform float uRadius;
+  uniform float uProjScale;
+  uniform vec3 uCentre;
+  uniform vec3 uViewDir;
+  varying vec3 vColor;
+  varying float vSeed;
+  varying float vFade;
+
+  ${NEAR_FADE_GLSL}
+
+  void main() {
+    vFade = nearFade(position);
+    if (vFade <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    float act = aGlow.x * exp2(-max(0.0, uTime - aGlow.y) / uGlowHalfLife);
+    act = act < 0.002 ? 0.0 : min(act, 1.0);
+    // Cells vary in size, and swell a little when they fire.
+    float r = uRadius * (0.9 + 0.6 * aSeed) * (1.0 + 0.3 * act);
+    gl_PointSize = 2.0 * ${SPRITE.toFixed(2)} * r * uProjScale / max(0.05, -mv.z);
+    vColor = mix(aTissue * (0.8 + 0.4 * (1.0 - aDepth)), SIGNAL, act);
+    vSeed = aSeed;
+  }
+`;
+
+const somaFragment = /* glsl */ `
+  uniform float uTime;
+  varying vec3 vColor;
+  varying float vSeed;
+  varying float vFade;
+
+  void main() {
+    vec2 p = (gl_PointCoord - 0.5) * 2.0 * ${SPRITE.toFixed(2)}; // in soma radii
+    float r = length(p);
+    float th = atan(p.y, p.x);
+    float ph = vSeed * 6.2831853;
+    // A few slow harmonics of angle: the morphing border-radius blob.
+    float m = 1.0
+      + 0.16 * sin(3.0 * th + ph + uTime * 0.6)
+      + 0.09 * sin(5.0 * th - 1.7 * ph - uTime * 0.45)
+      + 0.05 * sin(2.0 * th + 2.3 * ph + uTime * 0.3);
+    // Gaussian scaled so density crosses the 1/3 threshold at radius m.
+    // The fade scales density, so a cell shrinks below threshold smoothly
+    // rather than popping out.
+    float d = exp(-(r * r) / (m * m) * ${LN3}) * vFade;
+    if (d < 0.004) discard;
+    gl_FragColor = vec4(vColor * d, d);
+  }
+`;
+
+const neuriteVertex = /* glsl */ `
+  ${NODE_FETCH_GLSL}
+  uniform highp sampler2D uLinks;     // node a, node b, soma a, soma b
+  uniform int uLinksWidth;
+  uniform highp sampler2D uSomaGlow; // current glow per soma
+  uniform int uSomaGlowWidth;
+  uniform vec2 uTargetSize;
+  uniform float uRadius;
+  uniform float uProjScale;
+  uniform vec3 uCentre;
+  uniform vec3 uViewDir;
+  varying float vFade;
+  varying float vT;
+  varying float vAcross;
+  varying float vWidthA;
+  varying float vWidthB;
+  varying vec3 vColor;
+  varying float vGlowA;
+  varying float vGlowB;
+
+  float somaGlow(float index) {
+    int i = int(index + 0.5);
+    return texelFetch(uSomaGlow, ivec2(i % uSomaGlowWidth, i / uSomaGlowWidth), 0).r;
+  }
+
+  // Two triangles per neurite: (t along, side across).
+  const vec2 CORNERS[6] = vec2[6](
+    vec2(0.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
+    vec2(0.0, -1.0), vec2(1.0, 1.0), vec2(0.0, 1.0)
+  );
+
+  ${NEAR_FADE_GLSL}
+
+  void main() {
+    int link = gl_VertexID / 6;
+    vec2 corner = CORNERS[gl_VertexID - link * 6];
+    vec4 link4 = texelFetch(uLinks, ivec2(link % uLinksWidth, link / uLinksWidth), 0);
+    vec2 ends = link4.xy;
+    vec3 a = nodePosition(ends.x).xyz;
+    vec3 b = nodePosition(ends.y).xyz;
+    vFade = nearFade(0.5 * (a + b));
+    if (vFade <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    vec4 va = modelViewMatrix * vec4(a, 1.0);
+    vec4 vb = modelViewMatrix * vec4(b, 1.0);
+    if (va.z > -0.05 || vb.z > -0.05) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+
+    vec4 ca = projectionMatrix * va;
+    vec4 cb = projectionMatrix * vb;
+    vec2 halfSize = 0.5 * uTargetSize;
+    vec2 sa = ca.xy / ca.w * halfSize;
+    vec2 sb = cb.xy / cb.w * halfSize;
+    vec2 dir = sb - sa;
+    float len = length(dir);
+    dir = len > 1e-3 ? dir / len : vec2(1.0, 0.0);
+    vec2 normal = vec2(-dir.y, dir.x);
+
+    // Tube radius in pixels where it meets each soma: a third of the cell
+    // body, so the body reads as a bulb the neurites grow out of.
+    float ra = 0.32 * uRadius * uProjScale / -va.z;
+    float rb = 0.32 * uRadius * uProjScale / -vb.z;
+    float span = 2.4 * max(ra, rb); // covers the cross-section's tail
+
+    float t = corner.x;
+    vec2 s = mix(sa, sb, t) + normal * corner.y * span;
+    float w = mix(ca.w, cb.w, t);
+    gl_Position = vec4(s / halfSize * w, mix(ca.z / ca.w, cb.z / cb.w, t) * w, w);
+
+    vT = t;
+    vAcross = corner.y * span;
+    vWidthA = ra;
+    vWidthB = rb;
+    vColor = mix(nodeTissue(ends.x), nodeTissue(ends.y), t);
+    vGlowA = somaGlow(link4.z);
+    vGlowB = somaGlow(link4.w);
+  }
+`;
+
+const neuriteFragment = /* glsl */ `
+  varying float vGlowA;
+  varying float vGlowB;
+  varying float vFade;
+  varying float vT;
+  varying float vAcross;
+  varying float vWidthA;
+  varying float vWidthB;
+  varying vec3 vColor;
+
+  void main() {
+    // Thick at both somas, thinning to about 40% midway.
+    float ends = mix(vWidthA, vWidthB, vT);
+    float w = ends * mix(1.0, 0.5, 4.0 * vT * (1.0 - vT));
+    float d = exp(-(vAcross * vAcross) / (w * w) * ${LN3}) * 1.15 * vFade;
+    if (d < 0.004) discard;
+    // A firing soma lights its neurites, fading along them from its end.
+    float glow = max(vGlowA * (1.0 - vT) * (1.0 - vT), vGlowB * vT * vT);
+    gl_FragColor = vec4(mix(vColor, SIGNAL, glow) * d, d);
+  }
+`;
+
+const compositeFragment = /* glsl */ `
+  uniform sampler2D tDensity;
+  uniform float uBody;
+  uniform float uRim;
+  varying vec2 vUv;
+
+  void main() {
+    vec4 d = texture2D(tDensity, vUv);
+    float a = d.a;
+    // CSS feColorMatrix alpha row "18 -6": 0 at a = 1/3, 1 at a = 7/18.
+    float inside = clamp(18.0 * a - 6.0, 0.0, 1.0);
+    if (inside <= 0.0) discard;
+    // The membrane: brightest just inside the edge, fading toward the core.
+    float rim = inside * (1.0 - smoothstep(0.39, 0.85, a));
+    vec3 color = d.rgb / max(a, 1e-4);
+    gl_FragColor = vec4(color * (uBody * inside + uRim * rim), 0.0);
+  }
+`;
+
+export interface MembraneOptions {
+  /** Soma radius in model units. */
+  cellSize?: number;
+}
+
+/** Somas and neurites for one network and one neuron layout. */
+export class MembraneLayer {
+  readonly scene = new Scene();
+  private somaGeometry: BufferGeometry;
+  private neuriteGeometry: BufferGeometry;
+  private somaMaterial: ShaderMaterial;
+  private neuriteMaterial: ShaderMaterial;
+  private links: DataTexture;
+  private somaGlow: DataTexture;
+  private somaGlowData: Float32Array<ArrayBuffer>;
+  private somas: Uint32Array;
+  private sim: NetworkSim;
+  // Shared by both materials.
+  private centre = { value: new Vector3() };
+  private viewDir = { value: new Vector3(0, 0, 1) };
+
+  /**
+   * @param nodeGeometry the node layer's geometry, whose position, glow and
+   * colour attributes are shared rather than copied.
+   */
+  constructor(
+    sim: NetworkSim,
+    layout: NeuronLayout,
+    nodeGeometry: BufferGeometry,
+    nodes: NodeTextures,
+    options: MembraneOptions = {},
+  ) {
+    this.sim = sim;
+    const radius = options.cellSize ?? 0.006;
+    nodeGeometry.computeBoundingSphere();
+    this.centre.value.copy(nodeGeometry.boundingSphere!.center);
+    const signal = PALETTE.signal;
+
+    // Somas: an index into the node attributes, drawn as points.
+    const somaGeometry = new BufferGeometry();
+    for (const name of ['position', 'aGlow', 'aTissue', 'aSeed', 'aDepth']) {
+      somaGeometry.setAttribute(name, nodeGeometry.getAttribute(name));
+    }
+    somaGeometry.setIndex(new BufferAttribute(layout.somas, 1));
+    setPulledBounds(somaGeometry, sim.graph.bounds);
+    this.somaGeometry = somaGeometry;
+
+    this.somaMaterial = new ShaderMaterial({
+      vertexShader: somaVertex.replace(/SIGNAL/g, `vec3(${signal.r.toFixed(4)}, ${signal.g.toFixed(4)}, ${signal.b.toFixed(4)})`),
+      fragmentShader: somaFragment,
+      uniforms: {
+        uTime: { value: 0 },
+        uGlowHalfLife: { value: 0.65 },
+        uRadius: { value: radius },
+        uProjScale: { value: 1 },
+        uCentre: this.centre,
+        uViewDir: this.viewDir,
+      },
+      ...additive,
+    });
+    const somas = new Points(somaGeometry, this.somaMaterial);
+    somas.frustumCulled = false;
+
+    // Glow per soma, refreshed each frame: a few hundred values, so cheap to
+    // upload, and it lets neurites light up from the cell that fired.
+    this.somas = layout.somas;
+    const somaCount = layout.somas.length;
+    const glowWidth = Math.min(DATA_TEXTURE_WIDTH, Math.max(1, somaCount));
+    const glowHeight = Math.max(1, Math.ceil(somaCount / glowWidth));
+    this.somaGlowData = new Float32Array(glowWidth * glowHeight);
+    this.somaGlow = floatTexture(this.somaGlowData, glowWidth, glowHeight, RedFormat);
+    const somaIndex = new Map<number, number>();
+    layout.somas.forEach((node, i) => somaIndex.set(node, i));
+
+    // Neurites: pulled from a texture of (node, node, soma, soma), six
+    // vertices each.
+    const linkCount = layout.links.length / 2;
+    const width = Math.min(DATA_TEXTURE_WIDTH, Math.max(1, linkCount));
+    const height = Math.max(1, Math.ceil(linkCount / width));
+    const links = new Float32Array(width * height * 4);
+    for (let l = 0; l < linkCount; l++) {
+      const a = layout.links[l * 2], b = layout.links[l * 2 + 1];
+      links[l * 4] = a;
+      links[l * 4 + 1] = b;
+      links[l * 4 + 2] = somaIndex.get(a)!;
+      links[l * 4 + 3] = somaIndex.get(b)!;
+    }
+    this.links = floatTexture(links, width, height);
+
+    const neuriteGeometry = new BufferGeometry();
+    neuriteGeometry.setAttribute('position', vertexCountCarrier(linkCount * 6));
+    setPulledBounds(neuriteGeometry, sim.graph.bounds);
+    this.neuriteGeometry = neuriteGeometry;
+
+    this.neuriteMaterial = new ShaderMaterial({
+      vertexShader: neuriteVertex,
+      fragmentShader: neuriteFragment.replace(/SIGNAL/g, `vec3(${signal.r.toFixed(4)}, ${signal.g.toFixed(4)}, ${signal.b.toFixed(4)})`),
+      uniforms: {
+        ...nodes.uniforms(),
+        uLinks: { value: this.links },
+        uLinksWidth: { value: width },
+        uSomaGlow: { value: this.somaGlow },
+        uSomaGlowWidth: { value: glowWidth },
+        uTargetSize: { value: new Vector2(1, 1) },
+        uRadius: { value: radius },
+        uProjScale: { value: 1 },
+        uCentre: this.centre,
+        uViewDir: this.viewDir,
+      },
+      ...additive,
+    });
+    const neurites = new Mesh(neuriteGeometry, this.neuriteMaterial);
+    neurites.frustumCulled = false;
+
+    this.scene.add(neurites, somas);
+  }
+
+  setCellSize(radius: number): void {
+    this.somaMaterial.uniforms.uRadius.value = radius;
+    this.neuriteMaterial.uniforms.uRadius.value = radius;
+  }
+
+  /** Per-frame uniforms, for a density target `width` x `height` pixels. */
+  update(camera: PerspectiveCamera, width: number, height: number): void {
+    // Pixels per model unit at unit distance, for this target.
+    const projScale = camera.projectionMatrix.elements[5] * 0.5 * height;
+    const s = this.somaMaterial.uniforms;
+    s.uTime.value = this.sim.now;
+    s.uGlowHalfLife.value = Math.max(0.01, this.sim.params.glow);
+    s.uProjScale.value = projScale;
+    const n = this.neuriteMaterial.uniforms;
+    n.uProjScale.value = projScale;
+    this.viewDir.value.copy(camera.position).sub(this.centre.value).normalize();
+
+    let lit = false;
+    for (let i = 0; i < this.somas.length; i++) {
+      const g = this.sim.glowAt(this.somas[i]);
+      if (g !== this.somaGlowData[i]) {
+        this.somaGlowData[i] = g;
+        lit = true;
+      }
+    }
+    if (lit) this.somaGlow.needsUpdate = true;
+    (n.uTargetSize.value as Vector2).set(width, height);
+  }
+
+  dispose(): void {
+    // The node attributes belong to the node layer: detach before disposing,
+    // or three.js frees their GPU buffers along with this geometry.
+    for (const name of ['position', 'aGlow', 'aTissue', 'aSeed', 'aDepth']) this.somaGeometry.deleteAttribute(name);
+    this.somaGeometry.dispose();
+    this.neuriteGeometry.dispose();
+    this.somaMaterial.dispose();
+    this.neuriteMaterial.dispose();
+    this.links.dispose();
+    this.somaGlow.dispose();
+  }
+}
+
+/** Renders the current MembraneLayer's density and adds the cells to the frame. */
+export class MembranePass extends Pass {
+  layer: MembraneLayer | null = null;
+  private camera: PerspectiveCamera;
+  private timer: GpuTimer;
+  private density: WebGLRenderTarget;
+  private quad: FullScreenQuad;
+  private clearColor = new Color();
+
+  constructor(camera: Camera, timer: GpuTimer) {
+    super();
+    this.camera = camera as PerspectiveCamera;
+    this.timer = timer;
+    this.needsSwap = false;
+    this.density = new WebGLRenderTarget(1, 1, {
+      type: HalfFloatType,
+      minFilter: LinearFilter,
+      magFilter: LinearFilter,
+      depthBuffer: false,
+    });
+    this.quad = new FullScreenQuad(
+      new ShaderMaterial({
+        uniforms: {
+          tDensity: { value: this.density.texture },
+          uBody: { value: 0.32 },
+          uRim: { value: 0.95 },
+        },
+        vertexShader: /* glsl */ `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: compositeFragment,
+        ...additive,
+      }),
+    );
+  }
+
+  setSize(width: number, height: number): void {
+    // Half resolution: density is smooth by construction, and bilinear
+    // upsampling keeps the thresholded edge smooth too.
+    this.density.setSize(Math.max(1, Math.round(width / 2)), Math.max(1, Math.round(height / 2)));
+  }
+
+  /** How bright the cells' interiors and membranes are. */
+  setBrightness(body: number, rim: number): void {
+    const u = (this.quad.material as ShaderMaterial).uniforms;
+    u.uBody.value = body;
+    u.uRim.value = rim;
+  }
+
+  render(renderer: WebGLRenderer, _writeBuffer: WebGLRenderTarget, readBuffer: WebGLRenderTarget): void {
+    if (!this.layer) return;
+    this.timer.begin('membranes');
+    this.layer.update(this.camera, this.density.width, this.density.height);
+
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.getClearColor(this.clearColor);
+    const clearAlpha = renderer.getClearAlpha();
+
+    renderer.setRenderTarget(this.density);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear();
+    renderer.render(this.layer.scene, this.camera);
+
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+    renderer.setClearColor(this.clearColor, clearAlpha);
+    this.quad.render(renderer);
+
+    renderer.autoClear = autoClear;
+    this.timer.end();
+  }
+
+  dispose(): void {
+    this.density.dispose();
+    this.quad.material.dispose();
+    this.quad.dispose();
+  }
+}

@@ -24,6 +24,8 @@ import { EdgeLayer } from './render/edges';
 import { GpuTimer, type TimerMode } from './render/gpu-timer';
 import { NodeTextures } from './render/node-textures';
 import { ScenePass } from './render/scene-pass';
+import { MembraneLayer, MembranePass } from './render/membranes';
+import { layoutNeurons } from './graph/neurons';
 import { NodeLayer } from './render/nodes';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
@@ -66,6 +68,9 @@ const state: PanelState = {
     bloom: 0.45,
     autoRotate: true,
     restFps: 20,
+    neurons: true,
+    cellDensity: 0.012,
+    cellSize: 0.006,
   },
 };
 
@@ -134,6 +139,9 @@ const gpuReadout = document.querySelector<HTMLElement>('#gpu-text')!;
 const composer = new EffectComposer(renderer);
 const scenePass = new ScenePass(scene, camera, gpuTimer);
 composer.addPass(scenePass);
+// Neurons as merging, membraned cells, drawn over the scene before bloom.
+const membranePass = new MembranePass(camera, gpuTimer);
+composer.addPass(membranePass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
 const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5);
@@ -160,6 +168,10 @@ let sim: NetworkSim;
 let nodeLayer: NodeLayer;
 let edgeLayer: EdgeLayer;
 let nodeTextures: NodeTextures;
+let membraneLayer: MembraneLayer | null = null;
+/** The cell density the current membrane layer was laid out for. */
+let laidOutDensity = -1;
+let relayoutTimer = 0;
 let pulseLayer: PulseLayer;
 let picker: NodePicker;
 /** False until the first network is in place. */
@@ -196,6 +208,7 @@ function teardown(): void {
   edgeLayer.dispose();
   nodeLayer.dispose();
   pulseLayer.dispose();
+  disposeMembranes();
   nodeTextures.dispose();
 }
 
@@ -230,6 +243,7 @@ async function build(): Promise<void> {
   });
   picker = new NodePicker(graph.positions, graph.nodeCount);
   world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
+  layOutNeurons();
   scenePass.layers = [
     { label: 'synapses', object: edgeLayer.lines },
     { label: 'points', object: nodeLayer.points },
@@ -248,6 +262,23 @@ async function build(): Promise<void> {
   }
 }
 
+/** (Re)builds the somas and neurites for the current network and density. */
+function layOutNeurons(): void {
+  disposeMembranes();
+  const layout = layoutNeurons(graph, { fraction: state.look.cellDensity });
+  membraneLayer = new MembraneLayer(sim, layout, nodeLayer.geometry, nodeTextures, {
+    cellSize: state.look.cellSize,
+  });
+  membranePass.layer = membraneLayer;
+  laidOutDensity = state.look.cellDensity;
+}
+
+function disposeMembranes(): void {
+  membranePass.layer = null;
+  membraneLayer?.dispose();
+  membraneLayer = null;
+}
+
 function applySignal(): void {
   Object.assign(sim.params, state.signal);
   wake();
@@ -261,6 +292,14 @@ function applyLook(): void {
   pulseLayer.setCometLength(look.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
+  membranePass.enabled = look.neurons;
+  // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
+  // every tick of a drag, so wait for it to settle.
+  if (look.cellDensity !== laidOutDensity) {
+    clearTimeout(relayoutTimer);
+    relayoutTimer = window.setTimeout(layOutNeurons, 150);
+  }
+  membraneLayer?.setCellSize(look.cellSize);
   wake();
 }
 
