@@ -2,14 +2,14 @@
  * Wires a point cloud into a network.
  *
  * Each node gets a random number of synapses and spends them on its nearest
- * neighbours (found by an exact k-nearest search on a uniform grid), preferring
+ * neighbours (found by an exact k-nearest search on a k-d tree), preferring
  * close ones but not strictly nearest — a little disorder makes the
  * propagating wave front ragged and organic instead of spherical. A handful of long-range tracts cross the
  * hemispheres so activation can jump the midline, as it does through the
  * corpus callosum.
  */
 import { Rng } from '../core/rng';
-import { NearestFinder, UniformGrid } from './spatial';
+import { NearestFinder } from './spatial';
 import type { NetworkGraph } from './types';
 
 export interface WireOptions {
@@ -90,10 +90,9 @@ export function wireNetwork(cloud: Cloud, options: WireOptions = {}): NetworkGra
   const { positions, count } = cloud;
   const rng = new Rng(seed * 22695477 + 1);
 
-  // A fine grid (a few points per cell) sized from the data, independent of
-  // the reach: the reach caps edge length, it no longer drives the cost.
-  const grid = new UniformGrid(positions, count, UniformGrid.cellFor(positions, count, 3));
-  const nearest = new NearestFinder(grid, positions);
+  // An exact nearest-neighbour index. The reach caps edge length; it does not
+  // drive the cost, and neither does how unevenly the points are spread.
+  const nearest = new NearestFinder(positions, count);
 
   const srcList: number[] = [];
   const dstList: number[] = [];

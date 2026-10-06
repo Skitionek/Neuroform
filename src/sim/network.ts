@@ -348,7 +348,8 @@ export class NetworkSim {
   step(dt: number): void {
     const { graph, params, pulses, arrival } = this;
     // Clamp the step so a backgrounded tab doesn't resume with one giant jump.
-    const step = Math.min(0.05, Math.max(0, dt));
+    // 0.1 s still lets the renderer rest at 10 fps without slowing time down.
+    const step = Math.min(0.1, Math.max(0, dt));
     this.time += step;
     const now = this.time;
     this.glowRate = -Math.LN2 / Math.max(0.01, params.glow);

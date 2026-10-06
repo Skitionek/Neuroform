@@ -35,6 +35,8 @@ export interface LookSettings {
   cometLength: number;
   bloom: number;
   autoRotate: boolean;
+  /** Frame rate while nothing fast is happening; 0 renders every frame. */
+  restFps: number;
 }
 
 export interface PanelHandlers {
@@ -92,6 +94,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'cometLength', 0.01, 0.3, 0.005).name('comet length');
   look.add(l, 'bloom', 0, 2, 0.02);
   look.add(l, 'autoRotate').name('drift');
+  look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
   look.onChange(() => handlers.onLookChange());
 
   gui.add({ fire: () => handlers.onStimulate() }, 'fire').name('fire a node');

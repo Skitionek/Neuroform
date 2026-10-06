@@ -107,7 +107,24 @@ function smax(a: number, b: number, k: number): number {
 
 /* --------------------------------------------------------------- the fields */
 
-const BOX = { x: 0.46, yMin: -0.62, yMax: 0.46, z: 0.62 };
+interface Box { x: [number, number]; y: [number, number]; z: [number, number] }
+
+/** The whole brain. The cortex is sampled from this. */
+const BOX: Box = { x: [-0.46, 0.46], y: [-0.62, 0.46], z: [-0.62, 0.62] };
+
+/**
+ * Tight boxes for the small regions. Sampled from the whole-brain box, the
+ * cerebellum and stem (15% of the points) took 73% of all candidates. Each box
+ * covers everywhere its field's lower bound can be <= 0 (the analytic shape
+ * plus smooth-union bulge plus the full noise reach), with margin: measured
+ * over 10M points per seed, the regions sit at least 0.027 inside, except
+ * where the stem meets the brain box's own floor, which the full box shares.
+ * Uniform samples from any box containing a region are distributed exactly
+ * as samples from a larger one, so this changes which points are drawn for a
+ * seed but not the distribution they are drawn from.
+ */
+const CEREBELLUM_BOX: Box = { x: [-0.3, 0.3], y: [-0.49, -0.14], z: [-0.56, -0.1] };
+const STEM_BOX: Box = { x: [-0.12, 0.12], y: [-0.62, -0.04], z: [-0.27, 0.02] };
 
 /**
  * Upper bound on |simplex| (and therefore on normalised fbm). Measured maximum
@@ -131,6 +148,13 @@ interface FieldConfig {
  */
 interface Field {
   exact(x: number, y: number, z: number): number;
+  /**
+   * The region's smooth surface, without fold or grain noise. Normals come
+   * from this: it is a handful of arithmetic operations where `exact` costs
+   * several noise evaluations, and the normal of the underlying form is what
+   * a normal is for.
+   */
+  smooth(x: number, y: number, z: number): number;
   /** Writes [lower, upper] bounds on `exact` into `out`. */
   bounds(x: number, y: number, z: number, out: Float64Array): void;
 }
@@ -180,6 +204,9 @@ function cerebrumField(n: Noise3, cfg: FieldConfig): Field {
       // folds are added and the fold displacement simply fills the gap back in.
       return smax(d, -fissureSlab(x, y, z), FISSURE_K);
     },
+    smooth(x, y, z) {
+      return smax(cerebrumBase(x, y, z), -fissureSlab(x, y, z), FISSURE_K);
+    },
     bounds(x, y, z, out) {
       const base = cerebrumBase(x, y, z);
       const fissure = -fissureSlab(x, y, z);
@@ -211,6 +238,7 @@ function cerebellumField(n: Noise3): Field {
       d += CEREBELLUM_GRAIN * n.fbm(x * 9, y * 9, z * 9, 2);
       return d;
     },
+    smooth: cerebellumBase,
     bounds(x, y, z, out) {
       const base = cerebellumBase(x, y, z);
       out[0] = base - reach;
@@ -232,6 +260,7 @@ function stemField(n: Noise3): Field {
     exact(x, y, z) {
       return stemBase(x, y, z) + STEM_GRAIN * n.fbm(x * 12, y * 12, z * 12, 2);
     },
+    smooth: stemBase,
     bounds(x, y, z, out) {
       const base = stemBase(x, y, z);
       out[0] = base - reach;
@@ -304,17 +333,17 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     return other.exact(x, y, z) < -0.004;
   };
 
-  const fill = (field: Field, others: Field[], target: number, id: Region, shellDepth: number) => {
-    const exact: FieldFn = (x, y, z) => field.exact(x, y, z);
+  const fill = (field: Field, others: Field[], target: number, id: Region, shellDepth: number, box: Box) => {
+    const smooth: FieldFn = (x, y, z) => field.smooth(x, y, z);
     const interiorChance = interiorFraction * 0.06;
     let placed = 0;
     // A generous iteration ceiling: rejection sampling a thin shell out of a
     // box converges fast, but never let a bad config spin forever.
     const ceiling = target * 900 + 20000;
     for (let iter = 0; placed < target && iter < ceiling; iter++) {
-      const x = rng.range(-BOX.x, BOX.x);
-      const y = rng.range(BOX.yMin, BOX.yMax);
-      const z = rng.range(-BOX.z, BOX.z);
+      const x = rng.range(box.x[0], box.x[1]);
+      const y = rng.range(box.y[0], box.y[1]);
+      const z = rng.range(box.z[0], box.z[1]);
       samplerStats.candidates++;
 
       // Most candidates are nowhere near the surface. Decide those from the
@@ -350,7 +379,7 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
 
       const o = written * 3;
       positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
-      gradient(exact, x, y, z, normals, o);
+      gradient(smooth, x, y, z, normals, o);
       depth[written] = t;
       region[written] = id;
       maxRadius = Math.max(maxRadius, len3(x, y, z));
@@ -359,9 +388,9 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     }
   };
 
-  fill(cerebrum, [cerebellum, stem], quota[0], REGION.CORTEX, shell);
-  fill(cerebellum, [], quota[1], REGION.CEREBELLUM, shell * 0.6);
-  fill(stem, [], quota[2], REGION.STEM, shell * 0.75);
+  fill(cerebrum, [cerebellum, stem], quota[0], REGION.CORTEX, shell, BOX);
+  fill(cerebellum, [], quota[1], REGION.CEREBELLUM, shell * 0.6, CEREBELLUM_BOX);
+  fill(stem, [], quota[2], REGION.STEM, shell * 0.75, STEM_BOX);
 
   return {
     positions: positions.subarray(0, written * 3),

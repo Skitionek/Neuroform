@@ -63,6 +63,7 @@ const state: PanelState = {
     cometLength: 0.055,
     bloom: 0.45,
     autoRotate: true,
+    restFps: 20,
   },
 };
 
@@ -210,6 +211,7 @@ async function build(): Promise<void> {
   applyLook();
   resize();
   ready = true;
+  wake();
 
   // Open with a few firings so the piece is never a dead object on load.
   for (let i = 0; i < 3; i++) {
@@ -219,6 +221,7 @@ async function build(): Promise<void> {
 
 function applySignal(): void {
   Object.assign(sim.params, state.signal);
+  wake();
 }
 
 function applyLook(): void {
@@ -229,6 +232,45 @@ function applyLook(): void {
   pulseLayer.setCometLength(look.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
+  wake();
+}
+
+/* ---------------------------------------------------------- render pacing */
+
+/**
+ * Render on demand, the way plotly's 3D scenes skip redraws when nothing
+ * changed. While a wave runs or the user is handling the brain, every frame is
+ * drawn. At rest only slow things move (drift of a fraction of a pixel per
+ * second, a slow orbit, the shimmer), which look identical at `restFps`, so
+ * frames in between are skipped. Most of a frame's cost is the GPU (bloom
+ * especially), so skipped frames are where the power goes.
+ */
+let lastRender = 0;
+let activeUntil = 0;
+let interacting = false;
+
+/** Keeps the full frame rate for at least `ms` more milliseconds. */
+function wake(ms = 400): void {
+  activeUntil = Math.max(activeUntil, performance.now() + ms);
+}
+
+controls.addEventListener('start', () => {
+  interacting = true;
+  wake();
+});
+controls.addEventListener('end', () => {
+  interacting = false;
+  // Damping keeps the camera gliding for a while after release.
+  wake(1500);
+});
+
+function shouldRender(now: number): boolean {
+  // Below 10 fps a frame's step would exceed the sim's 0.1 s clamp and slow
+  // time down, so the slider's 1-9 behave as 10.
+  const restFps = state.look.restFps > 0 ? Math.max(10, state.look.restFps) : 0;
+  if (restFps <= 0 || interacting || now < activeUntil || sim.livePulses > 0) return true;
+  // A few ms of tolerance so rAF jitter doesn't skip a frame that is due.
+  return now - lastRender >= 1000 / restFps - 4;
 }
 
 /* -------------------------------------------------------------- interaction */
@@ -263,6 +305,7 @@ function pick(): number {
 
 canvas.addEventListener('pointermove', (event) => {
   updatePointer(event);
+  wake(300); // hover feedback should track the pointer at full rate
   if (pressPosition.distanceTo(new Vector2(event.clientX, event.clientY)) > 6) {
     pointerMoved = true;
   }
@@ -290,6 +333,7 @@ canvas.addEventListener('pointerup', (event) => {
 
 window.addEventListener('keydown', (event) => {
   if (!ready) return;
+  wake();
   if (event.key === ' ') {
     event.preventDefault();
     sim.stimulate(Math.floor(Math.random() * graph.nodeCount), 1);
@@ -326,8 +370,15 @@ let firingRate = 0;
 
 function frame(): void {
   requestAnimationFrame(frame);
+  if (!ready) {
+    clock.getDelta();
+    return;
+  }
+  const now = performance.now();
+  if (!shouldRender(now)) return;
+  lastRender = now;
+  // Time since the last drawn frame, whatever the pacing.
   const dt = clock.getDelta();
-  if (!ready) return;
 
   sim.step(dt);
 
@@ -339,7 +390,10 @@ function frame(): void {
   nodeLayer.update(pointerInside ? hovered : -1);
   pulseLayer.update();
 
-  controls.update();
+  // Real elapsed time, so the orbit turns at the same speed at any frame rate
+  // (without it OrbitControls steps a fixed angle per call: three times slower
+  // at a 20 fps rest, twice as fast on a 120 Hz display).
+  controls.update(Math.min(dt, 0.1));
   if (window.neuroform.postprocessing) {
     composer.render();
   } else {
@@ -347,8 +401,9 @@ function frame(): void {
   }
 
   fps += ((dt > 0 ? 1 / dt : 60) - fps) * 0.08;
-  const now = performance.now();
   if (now - lastReadout > 180) {
+    // The counter restarts when the network is rebuilt or reset.
+    if (sim.stats.firings < firingsAt) firingsAt = 0;
     firingRate = ((sim.stats.firings - firingsAt) * 1000) / (now - lastReadout);
     firingsAt = sim.stats.firings;
     lastReadout = now;
@@ -391,7 +446,10 @@ window.neuroform = {
   stimulate: (node) => {
     if (ready) sim.stimulate(node ?? Math.floor(Math.random() * graph.nodeCount), 1);
   },
-  reset: () => sim.reset(),
+  reset: () => {
+    sim.reset();
+    wake();
+  },
   rebuild: (structure) => {
     Object.assign(state.structure, structure);
     return build();
