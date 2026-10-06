@@ -28,6 +28,8 @@ export interface SignalSettings {
   shimmer: number;
 }
 
+export type CellMode = 'geometry' | 'post' | 'channels' | 'off';
+
 export interface LookSettings {
   pointSize: number;
   edgeOpacity: number;
@@ -37,8 +39,8 @@ export interface LookSettings {
   autoRotate: boolean;
   /** Frame rate while nothing fast is happening; 0 renders every frame. */
   restFps: number;
-  /** Draw a share of the nodes as membraned cells with merging neurites. */
-  neurons: boolean;
+  /** How gooey cells are drawn, if at all. */
+  cellMode: CellMode;
   /** Share of nodes drawn as cells. */
   cellDensity: number;
   /** Cell body radius, model units. */
@@ -101,7 +103,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'bloom', 0, 2, 0.02);
   look.add(l, 'autoRotate').name('drift');
   look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
-  look.add(l, 'neurons').name('neurons');
+  look.add(l, 'cellMode', ['geometry', 'post', 'channels', 'off']).name('cells');
   look.add(l, 'cellDensity', 0.01, 1, 0.01).name('cell density');
   look.add(l, 'cellSize', 0.0008, 0.02, 0.0001).name('cell size');
   look.onChange(() => handlers.onLookChange());
