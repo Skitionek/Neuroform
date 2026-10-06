@@ -21,8 +21,9 @@ a cerebrum ellipsoid with a narrowed frontal pole, temporal lobes smooth-unioned
 on, a flat base, a midline fissure subtracted from the top, a folia-striped
 cerebellum and a brain stem. Ridged noise added to the distance carves the gyri,
 which is what makes a cloud of dots read as cortex rather than as a lumpy egg.
-Points are rejection-sampled from a thin shell just inside the surface, with a
-sparse scatter deeper in so the mass has an interior.
+Points are rejection-sampled through the whole volume of the brain, so the
+mass is solid rather than a hollow skin. Lower `fill` to pull them back
+towards a rind just under the folded surface.
 
 **The wiring** (`src/graph/build.ts`) gives every node a random number of
 synapses and spends them on its nearest neighbours, preferring close ones but
@@ -146,6 +147,7 @@ Any setting is also a URL parameter, so a particular brain is a link:
 |---|---|
 | `nodes`, `seed` | how many points, and which brain |
 | `foldDepth`, `foldScale`, `shell` | how deep and how fine the gyri, how thick the surface layer |
+| `fill` | `1` fills the volume evenly, `0` crowds nodes into the surface layer |
 | `minDegree`, `maxDegree`, `radius` | synapses per node and how far they reach |
 | `speed`, `range` | how fast signal travels and how far it gets before fading |
 | `threshold`, `gain`, `decay`, `refractory` | what it takes to make a node fire |

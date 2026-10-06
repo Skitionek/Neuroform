@@ -7,8 +7,8 @@
  * Ridged noise added to the distance carves gyri and sulci, which is what makes
  * a cloud of dots read as cortex instead of as a lumpy egg.
  *
- * Points are rejection-sampled from the shell just inside the surface, with a
- * thin volumetric scatter deeper in so the mass has interior.
+ * Points are rejection-sampled from the brain's volume: evenly throughout by
+ * default, or concentrated in the shell just inside the surface (see fill).
  */
 import { Noise3 } from '../core/noise';
 import { Rng } from '../core/rng';
@@ -20,14 +20,22 @@ export interface BrainSampleOptions {
   /** How many points to place. */
   count: number;
   seed?: number;
-  /** Depth of the surface shell, in model units. */
+  /**
+   * Depth below the surface over which a node goes from surface to deep, in
+   * model units. Deep nodes are drawn smaller and dimmer, so the surface and
+   * its folds still read when the volume is filled.
+   */
   shell?: number;
   /** Amplitude of the cortical folding. */
   foldDepth?: number;
   /** Spatial frequency of the cortical folding. */
   foldScale?: number;
-  /** Fraction of points scattered through the interior volume. */
-  interiorFraction?: number;
+  /**
+   * How nodes are spread through the brain: 1 fills the whole volume
+   * evenly, 0 concentrates them in the surface shell (with a thin interior
+   * scatter), values between blend the two.
+   */
+  fill?: number;
 }
 
 export interface BrainCloud {
@@ -294,7 +302,7 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     shell = 0.055,
     foldDepth = 0.034,
     foldScale = 7.4,
-    interiorFraction = 0.17,
+    fill = 1,
   } = options;
 
   const noise = new Noise3(seed);
@@ -333,12 +341,11 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     return other.exact(x, y, z) < -0.004;
   };
 
-  const fill = (field: Field, others: Field[], target: number, id: Region, shellDepth: number, box: Box) => {
+  const sampleRegion = (field: Field, others: Field[], target: number, id: Region, shellDepth: number, box: Box) => {
     const smooth: FieldFn = (x, y, z) => field.smooth(x, y, z);
-    const interiorChance = interiorFraction * 0.06;
     let placed = 0;
-    // A generous iteration ceiling: rejection sampling a thin shell out of a
-    // box converges fast, but never let a bad config spin forever.
+    // A generous iteration ceiling: sampling converges fast, but never let a
+    // bad config spin forever.
     const ceiling = target * 900 + 20000;
     for (let iter = 0; placed < target && iter < ceiling; iter++) {
       const x = rng.range(box.x[0], box.x[1]);
@@ -358,12 +365,7 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
       } else {
         samplerStats.exactEvals++;
         d = field.exact(x, y, z);
-      }
-
-      if (d > 0 || d < -shellDepth) {
-        // Thin volumetric scatter deeper than the shell, so the mass has an
-        // inside and long-range connections have something to pass through.
-        if (!(d <= -shellDepth && rng.next() < interiorChance)) continue;
+        if (d > 0) continue;
       }
 
       // Don't stack one region's points inside another's body.
@@ -374,8 +376,10 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
       if (occluded) continue;
 
       const t = Math.min(1, -d / shellDepth);
-      // Bias towards the surface: a bright rind over a dim interior.
-      if (rng.next() > Math.pow(1 - t, 1.6) * 0.88 + interiorFraction * 0.7) continue;
+      // Acceptance by depth: uniform through the volume at fill 1; at fill 0
+      // a rind concentrated at the surface with a thin interior scatter.
+      const rind = Math.pow(1 - t, 1.6) * 0.99 + 0.01;
+      if (rng.next() > fill + (1 - fill) * rind) continue;
 
       const o = written * 3;
       positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
@@ -388,9 +392,9 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     }
   };
 
-  fill(cerebrum, [cerebellum, stem], quota[0], REGION.CORTEX, shell, BOX);
-  fill(cerebellum, [], quota[1], REGION.CEREBELLUM, shell * 0.6, CEREBELLUM_BOX);
-  fill(stem, [], quota[2], REGION.STEM, shell * 0.75, STEM_BOX);
+  sampleRegion(cerebrum, [cerebellum, stem], quota[0], REGION.CORTEX, shell, BOX);
+  sampleRegion(cerebellum, [], quota[1], REGION.CEREBELLUM, shell * 0.6, CEREBELLUM_BOX);
+  sampleRegion(stem, [], quota[2], REGION.STEM, shell * 0.75, STEM_BOX);
 
   return {
     positions: positions.subarray(0, written * 3),
