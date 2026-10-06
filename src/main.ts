@@ -19,6 +19,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { GraphBuilder, SupersededError, type GraphRequest } from './graph/request';
 import type { NetworkGraph } from './graph/types';
+import { pulseCapacity, scaleLook, scaleReach } from './core/scale';
 import { DEFAULT_PARAMS, NetworkSim } from './sim/network';
 import { EdgeLayer } from './render/edges';
 import { GpuTimer, type TimerMode } from './render/gpu-timer';
@@ -39,7 +40,7 @@ const readout = document.querySelector<HTMLElement>('#readout-text')!;
 
 const state: PanelState = {
   structure: {
-    nodes: 26000,
+    nodes: 55000,
     seed: 7,
     foldDepth: 0.034,
     foldScale: 7.4,
@@ -67,13 +68,13 @@ const state: PanelState = {
     pulseIntensity: 1.2,
     cometLength: 0.055,
     bloom: 0.45,
-    autoRotate: true,
+    autoRotate: false,
     restFps: 20,
     neurons: true,
     // Small blobs on every node; the merge is depth-aware, so only nodes
     // that are actually close fuse.
     cellDensity: 1,
-    cellSize: 0.0018,
+    cellSize: 0.0008,
     cellZoom: 0.75,
   },
 };
@@ -204,7 +205,7 @@ function currentRequest(): GraphRequest {
       foldScale: state.structure.foldScale,
       minDegree: state.structure.minDegree,
       maxDegree: state.structure.maxDegree,
-      radius: state.structure.radius,
+      radius: scaleReach(state.structure.radius, state.structure.nodes),
     },
   };
 }
@@ -239,14 +240,15 @@ async function build(): Promise<void> {
   // Swap synchronously, so no frame ever sees a half-built scene.
   teardown();
   graph = next;
-  sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
+  sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal, maxPulses: pulseCapacity(graph.nodeCount) });
 
+  const look = scaleLook(state.look, graph.nodeCount);
   nodeTextures = new NodeTextures(graph);
-  nodeLayer = new NodeLayer(graph, sim, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, nodeTextures, { opacity: state.look.edgeOpacity });
+  nodeLayer = new NodeLayer(graph, sim, { size: look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeTextures, { opacity: look.edgeOpacity });
   pulseLayer = new PulseLayer(sim, nodeTextures, {
-    cometLength: state.look.cometLength,
-    intensity: state.look.pulseIntensity,
+    cometLength: look.cometLength,
+    intensity: look.pulseIntensity,
   });
   picker = new NodePicker(graph.positions, graph.nodeCount);
   world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
@@ -274,7 +276,7 @@ function layOutNeurons(): void {
   disposeMembranes();
   const layout = layoutNeurons(graph, { fraction: state.look.cellDensity });
   membraneLayer = new MembraneLayer(sim, layout, nodeLayer.geometry, nodeTextures, {
-    cellSize: state.look.cellSize,
+    cellSize: scaleLook(state.look, graph.nodeCount).cellSize,
     cellZoom: state.look.cellZoom,
     referenceDistance: HOME_DISTANCE,
   });
@@ -295,10 +297,11 @@ function applySignal(): void {
 
 function applyLook(): void {
   const { look } = state;
-  nodeLayer.material.uniforms.uSize.value = look.pointSize;
-  edgeLayer.setOpacity(look.edgeOpacity);
-  pulseLayer.setIntensity(look.pulseIntensity);
-  pulseLayer.setCometLength(look.cometLength);
+  const scaled = scaleLook(look, graph.nodeCount);
+  nodeLayer.material.uniforms.uSize.value = scaled.pointSize;
+  edgeLayer.setOpacity(scaled.edgeOpacity);
+  pulseLayer.setIntensity(scaled.pulseIntensity);
+  pulseLayer.setCometLength(scaled.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
   membranePass.enabled = look.neurons;
@@ -308,7 +311,7 @@ function applyLook(): void {
     clearTimeout(relayoutTimer);
     relayoutTimer = window.setTimeout(layOutNeurons, 150);
   }
-  membraneLayer?.setCellSize(look.cellSize, look.cellZoom);
+  membraneLayer?.setCellSize(scaled.cellSize, look.cellZoom);
   wake();
 }
 

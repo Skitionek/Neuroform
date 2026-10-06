@@ -143,6 +143,14 @@ dataset instead of from noise.
 Any setting is also a URL parameter, so a particular brain is a link:
 `?nodes=60000&foldScale=9&range=3&bloom=1.2&seed=42`.
 
+Settings are tuned at 55,000 nodes and normalised for the actual count
+(`src/core/scale.ts`), so changing `nodes` makes the brain finer or coarser
+without changing how it behaves or how bright it looks. With node spacing
+`s = ∛(55000 / nodes)`, reach, point size, comet length and cell size scale
+by `s`, the synapse veil by `s²`, and pulse glow by `s`. Speed, range and the
+timings are already per unit of distance or time, so they are left alone.
+The pulse pool grows with the network so big waves are not clipped.
+
 | | |
 |---|---|
 | `nodes`, `seed` | how many points, and which brain |

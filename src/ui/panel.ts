@@ -68,7 +68,7 @@ export interface PanelState {
  * pointer or keyboard focus, and as a native tooltip.
  */
 const HELP: Record<string, string> = {
-  nodes: 'How many neurons make up the brain. More is denser and slower.',
+  nodes: 'How many neurons make up the brain. More is finer and slower; the other settings are normalised, so behaviour and brightness stay the same.',
   seed: 'Which brain: the same seed always grows the same shape and wiring.',
   foldDepth: 'How deep the folds (gyri) cut into the surface. 0 is a smooth brain.',
   foldScale: 'How fine the folds are: higher means more, narrower ridges.',
@@ -147,7 +147,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
   look.add(l, 'neurons').name('neurons');
   look.add(l, 'cellDensity', 0.01, 1, 0.01).name('cell density');
-  look.add(l, 'cellSize', 0.0008, 0.02, 0.0001).name('cell size');
+  look.add(l, 'cellSize', 0.0002, 0.01, 0.0001).name('cell size');
   look.add(l, 'cellZoom', 0, 1, 0.05).name('cells follow zoom');
   look.onChange(() => handlers.onLookChange());
 
