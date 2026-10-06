@@ -10,6 +10,8 @@ export interface StructureSettings {
   foldDepth: number;
   foldScale: number;
   shell: number;
+  /** 1 fills the brain's volume evenly; 0 keeps nodes to the surface shell. */
+  fill: number;
   minDegree: number;
   maxDegree: number;
   radius: number;
@@ -70,6 +72,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   structure.add(s, 'foldDepth', 0, 0.08, 0.001).name('fold depth');
   structure.add(s, 'foldScale', 2, 16, 0.1).name('fold scale');
   structure.add(s, 'shell', 0.02, 0.14, 0.002).name('shell');
+  structure.add(s, 'fill', 0, 1, 0.05).name('fill volume');
   structure.add(s, 'minDegree', 1, 8, 1).name('min synapses');
   structure.add(s, 'maxDegree', 2, 24, 1).name('max synapses');
   structure.add(s, 'radius', 0.03, 0.16, 0.002).name('reach');
