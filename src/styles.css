@@ -1,0 +1,86 @@
+:root {
+  --ink: #e8ecff;
+  --ink-dim: #7b86b4;
+  --void: #04040a;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--void);
+  color: var(--ink);
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.masthead {
+  position: fixed;
+  top: 0;
+  left: 0;
+  padding: 24px 16px 0 26px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+.masthead h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+}
+
+.masthead p {
+  margin: 8px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--ink-dim);
+}
+
+.readout {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  padding: 0 16px 18px 26px;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* lil-gui, dressed down to match */
+.lil-gui {
+  --background-color: rgba(10, 11, 22, 0.72);
+  --widget-color: rgba(255, 255, 255, 0.08);
+  --focus-color: rgba(255, 255, 255, 0.16);
+  --hover-color: rgba(255, 255, 255, 0.12);
+  --text-color: #cdd4f5;
+  --title-background-color: rgba(255, 255, 255, 0.04);
+  --font-family: ui-monospace, Menlo, monospace;
+  --font-size: 10.5px;
+  --widget-height: 18px;
+  --name-width: 52%;
+  backdrop-filter: blur(14px);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 640px) {
+  .masthead { padding: 16px 16px 0 16px; }
+  .readout { padding: 0 16px 14px 16px; }
+  .lil-gui.root { width: 240px; }
+}
