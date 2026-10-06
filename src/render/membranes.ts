@@ -283,8 +283,15 @@ const compositeFragment = /* glsl */ `
 `;
 
 export interface MembraneOptions {
-  /** Soma radius in model units. */
+  /** Soma radius in model units, at the reference camera distance. */
   cellSize?: number;
+  /**
+   * How far cells follow the zoom: 0 keeps a fixed size in the model (they
+   * swell as the camera closes in), 1 keeps a fixed size on screen.
+   */
+  cellZoom?: number;
+  /** Camera distance at which `cellSize` applies as given. */
+  referenceDistance?: number;
 }
 
 /** Somas and neurites for one network and one neuron layout. */
@@ -308,6 +315,9 @@ export class MembraneLayer {
   // Shared by both materials.
   private centre = { value: new Vector3() };
   private viewDir = { value: new Vector3(0, 0, 1) };
+  private baseRadius: number;
+  private cellZoom: number;
+  private referenceDistance: number;
 
   /**
    * @param nodeGeometry the node layer's geometry, whose position, glow and
@@ -322,6 +332,9 @@ export class MembraneLayer {
   ) {
     this.sim = sim;
     const radius = options.cellSize ?? 0.0018;
+    this.baseRadius = radius;
+    this.cellZoom = options.cellZoom ?? 0.75;
+    this.referenceDistance = options.referenceDistance ?? 2;
     nodeGeometry.computeBoundingSphere();
     this.centre.value.copy(nodeGeometry.boundingSphere!.center);
     const signal = PALETTE.signal;
@@ -416,7 +429,15 @@ export class MembraneLayer {
     this.depthScene.add(neuriteCores, somaCores);
   }
 
-  setCellSize(radius: number): void {
+  setCellSize(radius: number, cellZoom = this.cellZoom): void {
+    this.baseRadius = radius;
+    this.cellZoom = cellZoom;
+  }
+
+  /** Radius for a camera `distance` from the brain's centre. */
+  private applyRadius(distance: number): void {
+    const zoom = Math.max(distance, 1e-3) / this.referenceDistance;
+    const radius = this.baseRadius * Math.pow(zoom, this.cellZoom);
     this.somaMaterial.uniforms.uRadius.value = radius;
     this.neuriteMaterial.uniforms.uRadius.value = radius;
     // Blobs this close in depth merge; anything further behind is hidden.
@@ -433,7 +454,9 @@ export class MembraneLayer {
     s.uProjScale.value = projScale;
     const n = this.neuriteMaterial.uniforms;
     n.uProjScale.value = projScale;
-    this.viewDir.value.copy(camera.position).sub(this.centre.value).normalize();
+    this.viewDir.value.copy(camera.position).sub(this.centre.value);
+    this.applyRadius(this.viewDir.value.length());
+    this.viewDir.value.normalize();
 
     let lit = false;
     for (let i = 0; i < this.somas.length; i++) {

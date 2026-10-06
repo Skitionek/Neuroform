@@ -85,6 +85,19 @@ html, body {
   border-left: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* What the option under the pointer does; pinned to the panel's bottom. */
+.panel-help {
+  position: sticky;
+  bottom: 0;
+  padding: 8px var(--padding, 4px);
+  min-height: 3.6em;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgba(205, 212, 245, 0.75);
+  background: rgba(10, 11, 22, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 @media (max-width: 640px) {
   .masthead { padding: 16px 16px 0 16px; }
   .readout { padding: 0 16px 14px 16px; }

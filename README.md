@@ -155,7 +155,7 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
-| `neurons`, `cellDensity`, `cellSize` | cells on or off (`0`), share of nodes drawn as cells, blob radius |
+| `neurons`, `cellDensity`, `cellSize`, `cellZoom` | cells on or off (`0`), share of nodes drawn as cells, blob radius, how far cells follow the zoom (`0` fixed in the brain, `1` fixed on screen) |
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
