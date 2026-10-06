@@ -12,7 +12,7 @@
  * Not instanced on purpose: instancing a two-vertex line 340k times wastes
  * most of every vertex batch on real GPUs, and was 18x slower here.
  */
-import { AdditiveBlending, BufferGeometry, GLSL3, LineSegments, RGFormat, ShaderMaterial, type DataTexture } from 'three';
+import { AdditiveBlending, BufferGeometry, LineSegments, RGFormat, ShaderMaterial, type DataTexture } from 'three';
 import type { NetworkGraph } from '../graph/types';
 import {
   DATA_TEXTURE_WIDTH,
@@ -22,7 +22,6 @@ import {
   vertexCountCarrier,
   type NodeTextures,
 } from './node-textures';
-import { MASK_FRAGMENT_GLSL, type MaskUniforms } from './mask';
 import { PALETTE } from './palette';
 
 const vertexShader = /* glsl */ `
@@ -34,7 +33,6 @@ const vertexShader = /* glsl */ `
 
   varying vec3 vColor;
   varying float vFade;
-  varying float vViewDepth;
 
   void main() {
     int edge = gl_VertexID >> 1;
@@ -53,24 +51,17 @@ const vertexShader = /* glsl */ `
     // Deep wires recede so the surface structure reads first.
     vFade = (tract ? 0.85 : 1.0) * (1.0 - 0.55 * end.w);
 
-    vec4 mv = modelViewMatrix * vec4(end.xyz, 1.0);
-    vViewDepth = -mv.z;
-    gl_Position = projectionMatrix * mv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(end.xyz, 1.0);
   }
 `;
 
 const fragmentShader = /* glsl */ `
-  ${MASK_FRAGMENT_GLSL}
   uniform float uOpacity;
   varying vec3 vColor;
   varying float vFade;
-  varying float vViewDepth;
 
   void main() {
-    outColor = vec4(vColor * vFade, uOpacity * vFade);
-    // Synapses add a thinner trace to the mask, so blurred dots grow necks
-    // along their connections.
-    outMask = encodeMask(0.3 * vFade, vViewDepth, 0.0);
+    gl_FragColor = vec4(vColor * vFade, uOpacity * vFade);
   }
 `;
 
@@ -86,7 +77,7 @@ export class EdgeLayer {
   private material: ShaderMaterial;
   private edges: DataTexture;
 
-  constructor(graph: NetworkGraph, nodes: NodeTextures, mask: MaskUniforms, options: EdgeLayerOptions = {}) {
+  constructor(graph: NetworkGraph, nodes: NodeTextures, options: EdgeLayerOptions = {}) {
     const { opacity = 0.032, tractThreshold = 0.28 } = options;
     const m = graph.edgeCount;
 
@@ -105,9 +96,7 @@ export class EdgeLayer {
     this.material = new ShaderMaterial({
       vertexShader,
       fragmentShader,
-      glslVersion: GLSL3,
       uniforms: {
-        ...mask,
         ...nodes.uniforms(),
         uEdges: { value: this.edges },
         uEdgesWidth: { value: width },

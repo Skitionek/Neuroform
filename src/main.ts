@@ -26,13 +26,11 @@ import { NodeTextures } from './render/node-textures';
 import { ScenePass } from './render/scene-pass';
 import { MembraneLayer, MembranePass } from './render/membranes';
 import { layoutNeurons } from './graph/neurons';
-import { GooeyPostPass } from './render/gooey-post';
-import { MASK_CHANNELS, MASK_DEPTH, MASK_OFF, createMaskUniforms } from './render/mask';
 import { NodeLayer } from './render/nodes';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { PALETTE } from './render/palette';
-import { createPanel, type CellMode, type PanelState } from './ui/panel';
+import { createPanel, type PanelState } from './ui/panel';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!;
 const readout = document.querySelector<HTMLElement>('#readout-text')!;
@@ -70,11 +68,7 @@ const state: PanelState = {
     bloom: 0.45,
     autoRotate: true,
     restFps: 20,
-    // How cells are drawn: 'geometry' (depth pre-pass and density splats),
-    // 'post' (depth-aware blur of a mask written by the scene pass),
-    // 'channels' (near/far as red/green, brightness as blue; only the near
-    // share made gooey), or 'off'.
-    cellMode: 'geometry' as CellMode,
+    neurons: true,
     // Small blobs on every node; the merge is depth-aware, so only nodes
     // that are actually close fuse.
     cellDensity: 1,
@@ -96,8 +90,6 @@ function applyUrlOverrides(): void {
       if (raw === null) continue;
       if (typeof group[key] === 'boolean') {
         group[key] = raw !== '0' && raw !== 'false';
-      } else if (typeof group[key] === 'string') {
-        group[key] = raw;
       } else {
         const value = Number(raw);
         if (Number.isFinite(value)) group[key] = value;
@@ -152,14 +144,6 @@ composer.addPass(scenePass);
 // Neurons as merging, membraned cells, drawn over the scene before bloom.
 const membranePass = new MembranePass(camera, gpuTimer);
 composer.addPass(membranePass);
-// The post variants: the scene pass also writes a mask, merged here.
-const maskUniforms = createMaskUniforms();
-const gooeyPass = new GooeyPostPass(camera, gpuTimer, () => ({
-  distance: camera.position.distanceTo(nodeLayer.geometry.boundingSphere!.center),
-  radius: graph.bounds,
-}));
-gooeyPass.sources = { color: scenePass.withMask.textures[0], mask: scenePass.withMask.textures[1] };
-composer.addPass(gooeyPass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
 const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5);
@@ -253,8 +237,8 @@ async function build(): Promise<void> {
   sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
 
   nodeTextures = new NodeTextures(graph);
-  nodeLayer = new NodeLayer(graph, sim, maskUniforms, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, nodeTextures, maskUniforms, { opacity: state.look.edgeOpacity });
+  nodeLayer = new NodeLayer(graph, sim, { size: state.look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeTextures, { opacity: state.look.edgeOpacity });
   pulseLayer = new PulseLayer(sim, nodeTextures, {
     cometLength: state.look.cometLength,
     intensity: state.look.pulseIntensity,
@@ -310,14 +294,7 @@ function applyLook(): void {
   pulseLayer.setCometLength(look.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
-  const mode = look.cellMode;
-  membranePass.enabled = mode === 'geometry';
-  const post = mode === 'post' || mode === 'channels';
-  gooeyPass.enabled = post;
-  scenePass.useMask = post;
-  gooeyPass.mode = mode === 'channels' ? MASK_CHANNELS : MASK_DEPTH;
-  maskUniforms.uMaskMode.value = mode === 'post' ? MASK_DEPTH : mode === 'channels' ? MASK_CHANNELS : MASK_OFF;
-  gooeyPass.cellSize = look.cellSize;
+  membranePass.enabled = look.neurons;
   // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
   // every tick of a drag, so wait for it to settle.
   if (look.cellDensity !== laidOutDensity) {
@@ -480,10 +457,6 @@ function frame(): void {
     needsPick = false;
   }
 
-  // Near and far side of the brain, for the channel mask's red/green split.
-  const toCentre = camera.position.distanceTo(nodeLayer.geometry.boundingSphere!.center);
-  maskUniforms.uDepthNear.value = toCentre - graph.bounds;
-  maskUniforms.uDepthRange.value = 2 * graph.bounds;
   nodeLayer.update(pointerInside ? hovered : -1);
   pulseLayer.update();
   gpuTimer.poll();

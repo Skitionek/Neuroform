@@ -4,7 +4,7 @@
  * (see clearTo), and when the GPU timer is on it draws one layer at a time so
  * each can be timed separately.
  */
-import { Color, HalfFloatType, LinearFilter, WebGLRenderTarget, type Camera, type Object3D, type Scene, type WebGLRenderer } from 'three';
+import { Color, type Camera, type Object3D, type Scene, type WebGLRenderer, type WebGLRenderTarget } from 'three';
 import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import type { GpuTimer } from './gpu-timer';
 
@@ -16,19 +16,6 @@ export interface TimedLayer {
 export class ScenePass extends Pass {
   /** Layers to time individually when the GPU timer is on. */
   layers: TimedLayer[] = [];
-  /**
-   * When set, the scene renders into a two-attachment target instead of the
-   * composer's buffer: colour, and the gooey mask the layers write in the
-   * same draw. A later pass composites them into the frame.
-   */
-  useMask = false;
-  /** Colour (textures[0]) and mask (textures[1]) when useMask is on. */
-  readonly withMask = new WebGLRenderTarget(1, 1, {
-    count: 2,
-    type: HalfFloatType,
-    minFilter: LinearFilter,
-    magFilter: LinearFilter,
-  });
 
   private scene: Scene;
   private camera: Camera;
@@ -46,7 +33,7 @@ export class ScenePass extends Pass {
   render(renderer: WebGLRenderer, _writeBuffer: WebGLRenderTarget, readBuffer: WebGLRenderTarget): void {
     const autoClear = renderer.autoClear;
     renderer.autoClear = false;
-    this.clearTo(renderer, this.useMask ? this.withMask : this.renderToScreen ? null : readBuffer);
+    this.clearTo(renderer, this.renderToScreen ? null : readBuffer);
     this.draw(renderer);
     renderer.autoClear = autoClear;
   }
@@ -68,10 +55,6 @@ export class ScenePass extends Pass {
     renderer.setRenderTarget(target);
     renderer.setClearColor(this.clearColor, alpha);
     renderer.clear();
-  }
-
-  setSize(width: number, height: number): void {
-    this.withMask.setSize(width, height);
   }
 
   /** Draws the scene; one layer at a time, timed, when the timer is on. */
