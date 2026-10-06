@@ -139,13 +139,9 @@ export function datasetGraph(url: string): GraphSource {
     id: `dataset:${url}`,
     label: url,
     async load(): Promise<NetworkGraph> {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`cannot load ${url}: ${response.status}`);
-      // A dev server answers an unknown path with index.html, so a typo in the
-      // filename otherwise surfaces as a baffling JSON parse error.
-      const type = response.headers.get('content-type') ?? '';
-      if (!type.includes('json')) throw new Error(`${url} is not JSON (got ${type.split(';')[0] || 'no content type'})`);
-      return graphFromDataset((await response.json()) as GraphDataset);
+      // Imported lazily: request.ts imports this module.
+      const { buildGraph } = await import('./request');
+      return buildGraph({ kind: 'dataset', url: new URL(url, globalThis.location?.href).href });
     },
   };
 }
