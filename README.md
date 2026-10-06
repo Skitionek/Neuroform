@@ -93,6 +93,13 @@ about 2 seconds off the main thread; swapping them in costs ~70ms on it.
   at `restFps` (20 by default) and the rest are skipped, about two thirds of
   them. The orbit is driven by elapsed time, so it turns at the same speed at
   any frame rate or refresh rate.
+- **Cells are drawn only as finely as they need.** Their density buffer is a
+  smooth field thresholded after upsampling, so it drops below full
+  resolution (to half at most) as long as a typical cell stays 2.5 pixels
+  across in it. Cell glow is read straight from a GPU copy of the simulation's
+  (peak, start) per node, updated a texture row at a time when nodes fire,
+  rather than recomputed for every cell on the CPU each frame. Bloom works
+  from CSS pixels, a quarter of the cost on a high-density screen.
 
 ### Measuring the GPU
 
@@ -164,6 +171,7 @@ The pulse pool grows with the network so big waves are not clipped.
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
 | `neurons`, `cellDensity`, `cellSize`, `cellZoom` | cells on or off (`0`), share of nodes drawn as cells, blob radius, how far cells follow the zoom (`0` fixed in the brain, `1` fixed on screen) |
+| `cellRes` | pin the cells' buffer resolution (`1` full, `0.5` half); by default it fits the cell size |
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.

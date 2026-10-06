@@ -148,6 +148,10 @@ const scenePass = new ScenePass(scene, camera, gpuTimer);
 composer.addPass(scenePass);
 // Neurons as merging, membraned cells, drawn over the scene before bloom.
 const membranePass = new MembranePass(camera, gpuTimer);
+// `?cellRes=1` pins the cells' density buffer to full resolution (or any
+// share of it); by default it drops as far as the cells' size allows.
+const cellRes = Number(new URLSearchParams(window.location.search).get('cellRes'));
+if (cellRes > 0) membranePass.setResolution(cellRes);
 composer.addPass(membranePass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
@@ -433,7 +437,9 @@ function resize(): void {
   renderer.setSize(width, height, false);
   composer.setPixelRatio(ratio);
   composer.setSize(width, height);
-  bloom.setSize(width * ratio, height * ratio);
+  // Bloom is a wide blur: from CSS pixels it looks the same as from device
+  // pixels on a high-density screen, at a quarter of the cost.
+  bloom.setSize(width, height);
 
   camera.aspect = width / Math.max(1, height);
   camera.updateProjectionMatrix();
@@ -517,7 +523,7 @@ declare global {
       rebuild(structure?: Partial<PanelState['structure']>): Promise<void>;
       get graph(): NetworkGraph;
       get sim(): NetworkSim;
-      layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer };
+      layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer; membranes: MembraneLayer | null };
       /** Smoothed GPU milliseconds per render section, when ?gpu is set. */
       gpuTimings(): Record<string, number>;
       /** Clears the GPU timings, e.g. after changing a setting. */
@@ -548,7 +554,7 @@ window.neuroform = {
   },
   get graph() { return graph; },
   get sim() { return sim; },
-  get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer }; },
+  get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer, membranes: membraneLayer }; },
   gpuTimings: () => Object.fromEntries(gpuTimer.ms),
   resetGpuTimings: () => gpuTimer.reset(),
   scene,
