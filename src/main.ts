@@ -14,7 +14,6 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
@@ -22,6 +21,10 @@ import { GraphBuilder, SupersededError, type GraphRequest } from './graph/reques
 import type { NetworkGraph } from './graph/types';
 import { DEFAULT_PARAMS, NetworkSim } from './sim/network';
 import { EdgeLayer } from './render/edges';
+import { GpuTimer, type TimerMode } from './render/gpu-timer';
+import { NodeTextures } from './render/node-textures';
+import { SplitScenePass } from './render/scene-pass';
+import { createSplitUniforms } from './render/split';
 import { NodeLayer } from './render/nodes';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
@@ -64,6 +67,10 @@ const state: PanelState = {
     bloom: 0.45,
     autoRotate: true,
     restFps: 20,
+    // Off by default: in measurements so far the split's extra vertex work and
+    // passes outweighed its fill savings. Worth trying where fill dominates
+    // (high-DPI screens, large points); measure with ?gpu=1.
+    farResolution: 1,
   },
 };
 
@@ -121,15 +128,38 @@ controls.autoRotateSpeed = 0.28;
 const world = new Group();
 scene.add(world);
 
+// `?gpu=1` times each render pass with GPU timer queries and shows the result
+// under the readout; `?gpu=finish` is a stalling fallback for GPUs and
+// browsers without the timer extension.
+const gpuParam = new URLSearchParams(window.location.search).get('gpu');
+const timerMode: TimerMode = gpuParam === 'finish' ? 'finish' : gpuParam ? 'query' : 'off';
+const gpuTimer = new GpuTimer(renderer.getContext() as WebGL2RenderingContext, timerMode);
+const gpuReadout = document.querySelector<HTMLElement>('#gpu-text')!;
+
+/** Shared by every layer's material; the scene pass flips it per half. */
+const split = createSplitUniforms();
+
 const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const scenePass = new SplitScenePass(scene, camera, split, gpuTimer);
+composer.addPass(scenePass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
 const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5);
 composer.addPass(bloom);
 // Without this the composer's linear buffer reaches the canvas unconverted and
 // the near-black background lifts to navy.
-composer.addPass(new OutputPass());
+const output = new OutputPass();
+composer.addPass(output);
+
+// Bloom and output are timed as wholes.
+for (const [label, pass] of [['bloom', bloom], ['output', output]] as const) {
+  const render = pass.render.bind(pass);
+  pass.render = (...args: Parameters<typeof render>) => {
+    gpuTimer.begin(label);
+    render(...args);
+    gpuTimer.end();
+  };
+}
 
 /* ------------------------------------------------------------------ network */
 
@@ -137,6 +167,7 @@ let graph: NetworkGraph;
 let sim: NetworkSim;
 let nodeLayer: NodeLayer;
 let edgeLayer: EdgeLayer;
+let nodeTextures: NodeTextures;
 let pulseLayer: PulseLayer;
 let picker: NodePicker;
 /** False until the first network is in place. */
@@ -169,11 +200,11 @@ function currentRequest(): GraphRequest {
 
 function teardown(): void {
   if (!nodeLayer) return;
-  world.remove(nodeLayer.points, edgeLayer.object, pulseLayer.lines);
-  // Edges first: they borrow the node layer's attributes.
+  world.remove(nodeLayer.points, edgeLayer.lines, pulseLayer.lines);
   edgeLayer.dispose();
   nodeLayer.dispose();
   pulseLayer.dispose();
+  nodeTextures.dispose();
 }
 
 async function build(): Promise<void> {
@@ -198,14 +229,22 @@ async function build(): Promise<void> {
   graph = next;
   sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
 
-  nodeLayer = new NodeLayer(graph, sim, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, nodeLayer.geometry, { opacity: state.look.edgeOpacity });
-  pulseLayer = new PulseLayer(graph, sim, {
+  nodeTextures = new NodeTextures(graph);
+  nodeLayer = new NodeLayer(graph, sim, split, { size: state.look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeTextures, split, { opacity: state.look.edgeOpacity });
+  pulseLayer = new PulseLayer(sim, nodeTextures, split, {
     cometLength: state.look.cometLength,
     intensity: state.look.pulseIntensity,
   });
   picker = new NodePicker(graph.positions, graph.nodeCount);
-  world.add(edgeLayer.object, pulseLayer.lines, nodeLayer.points);
+  world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
+  // The view split passes through the middle of the cloud.
+  split.uSplitCentre.value.copy(nodeLayer.geometry.boundingSphere!.center);
+  scenePass.layers = [
+    { label: 'synapses', object: edgeLayer.lines },
+    { label: 'points', object: nodeLayer.points },
+    { label: 'pulses', object: pulseLayer.lines },
+  ];
   hovered = -1;
 
   applyLook();
@@ -232,6 +271,7 @@ function applyLook(): void {
   pulseLayer.setCometLength(look.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
+  scenePass.farScale = look.farResolution;
   wake();
 }
 
@@ -389,6 +429,7 @@ function frame(): void {
 
   nodeLayer.update(pointerInside ? hovered : -1);
   pulseLayer.update();
+  gpuTimer.poll();
 
   // Real elapsed time, so the orbit turns at the same speed at any frame rate
   // (without it OrbitControls steps a fixed angle per call: three times slower
@@ -402,6 +443,7 @@ function frame(): void {
 
   fps += ((dt > 0 ? 1 / dt : 60) - fps) * 0.08;
   if (now - lastReadout > 180) {
+    if (timerMode !== 'off') gpuReadout.textContent = gpuTimer.summary();
     // The counter restarts when the network is rebuilt or reset.
     if (sim.stats.firings < firingsAt) firingsAt = 0;
     firingRate = ((sim.stats.firings - firingsAt) * 1000) / (now - lastReadout);
@@ -429,11 +471,17 @@ declare global {
     neuroform: {
       stimulate(node?: number): void;
       reset(): void;
+      /** Changes look settings, e.g. `look({ bloom: 1, farResolution: 1 })`. */
+      look(changes: Partial<PanelState['look']>): void;
       /** Rebuilds the network, optionally changing structure settings first. */
       rebuild(structure?: Partial<PanelState['structure']>): Promise<void>;
       get graph(): NetworkGraph;
       get sim(): NetworkSim;
       layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer };
+      /** Smoothed GPU milliseconds per render section, when ?gpu is set. */
+      gpuTimings(): Record<string, number>;
+      /** Clears the GPU timings, e.g. after changing a setting. */
+      resetGpuTimings(): void;
       scene: Scene;
       camera: PerspectiveCamera;
       renderer: WebGLRenderer;
@@ -450,6 +498,10 @@ window.neuroform = {
     sim.reset();
     wake();
   },
+  look: (changes) => {
+    Object.assign(state.look, changes);
+    applyLook();
+  },
   rebuild: (structure) => {
     Object.assign(state.structure, structure);
     return build();
@@ -457,6 +509,8 @@ window.neuroform = {
   get graph() { return graph; },
   get sim() { return sim; },
   get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer }; },
+  gpuTimings: () => Object.fromEntries(gpuTimer.ms),
+  resetGpuTimings: () => gpuTimer.reset(),
   scene,
   camera,
   renderer,

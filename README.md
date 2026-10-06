@@ -39,10 +39,11 @@ threshold fires and then sits refractory. Signal amplitude decays with the
 *distance travelled* rather than per hop, so how far a wave spreads stays the
 same whether the cloud has 5,000 points or 100,000.
 
-**The rendering** is four draw calls: the point cloud, a very dim line mesh
-for the synapses at rest (plus a small one for the long-range tracts), and one
-instanced line per pulse in flight, drawn as a comet running from the firing
-node toward its neighbour.
+**The rendering** is three draw calls: the point cloud; every synapse, as a
+very dim line (long-range tracts tinted violet in the same draw); and every
+pulse in flight, drawn as a comet running from the firing node toward its
+neighbour. Synapses and pulses pull their endpoints from node textures by
+`gl_VertexID`, so each one knows both of its ends.
 
 ## Performance
 
@@ -70,11 +71,33 @@ about 2 seconds off the main thread; swapping them in costs ~70ms on it.
   over the node attributes rather than a copy of them.
 - **Picking** marches the pointer ray through a grid instead of testing every
   point.
+- **Lines are not instanced.** Instancing a two-vertex line hundreds of
+  thousands of times wastes most of each vertex batch (it was 18x slower in
+  testing); a plain draw that works out its synapse from `gl_VertexID` is not.
 - **Rendering is paced.** While a wave runs or the camera is being handled,
   every frame is drawn; at rest only slow motion remains, so frames are drawn
   at `restFps` (20 by default) and the rest are skipped, about two thirds of
   them. The orbit is driven by elapsed time, so it turns at the same speed at
   any frame rate or refresh rate.
+
+### Measuring the GPU
+
+`?gpu=1` times each render pass with WebGL timer queries and shows the result
+under the readout (synapses, points and pulses separately, then bloom and
+output). Where the browser or GPU lacks the timer extension, `?gpu=finish`
+brackets each pass with `gl.finish()` instead: it stalls the pipeline, so the
+totals are inflated, but it still ranks the passes. From a script:
+`neuroform.gpuTimings()` and `neuroform.resetGpuTimings()`.
+
+### The far-half split
+
+`farResolution` below 1 renders the half of the brain behind its centre at
+reduced resolution and adds it back in. The frame is additive, so this is
+lossless at full resolution; at 0.5 the far half softens into something like
+depth of field. It is off by default: each half still runs the vertex shader
+for every point and synapse, and in testing that extra work outweighed the
+fill it saved. It may win where fill dominates, such as high-DPI screens or
+large point sizes, which `?gpu=1` will show.
 
 ## Driving it from data
 
@@ -127,8 +150,10 @@ Any setting is also a URL parameter, so a particular brain is a link:
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
+| `farResolution` | resolution of the far half of the brain, `1` (default) to `0.25` |
+| `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
 `window.neuroform` exposes the graph, the simulation and the layers for driving
-the piece from a script: `stimulate(node?)`, `reset()`, and
-`rebuild({ nodes: 60000, seed: 3 })`.
+the piece from a script: `stimulate(node?)`, `reset()`,
+`look({ bloom: 1 })` and `rebuild({ nodes: 60000, seed: 3 })`.
