@@ -5,10 +5,19 @@ and it fires: the signal runs down its connections at a finite speed, charges
 whatever it reaches, and whatever crosses threshold fires in turn. What you see
 is a wave of activation sweeping out through the tissue and fading.
 
+**Live:** https://skitionek.github.io/fun/
+
 ```
 npm install
 npm run dev
 ```
+
+### Publishing
+
+`.github/workflows/pages.yml` builds every push and deploys the default
+branch to GitHub Pages. Turn it on once under the repository's
+Settings → Pages → Source: **GitHub Actions**. The build uses relative asset
+paths, so it works under any repository name or a custom domain.
 
 Click a node to fire it. Drag to orbit, scroll to zoom. `space` fires a random
 node, `r` quiets the network. The panel in the corner opens with the structure,
@@ -113,7 +122,7 @@ totals are inflated, but it still ranks the passes. From a script:
 ## Driving it from data
 
 The generator is one implementation of `GraphSource` (`src/graph/types.ts`); a
-dataset is another. Load one with `?dataset=/your-graph.json`:
+dataset is another. Load one with `?dataset=your-graph.json`:
 
 ```json
 {
@@ -127,7 +136,7 @@ dataset is another. Load one with `?dataset=/your-graph.json`:
 `nodes` and `edges` may also be flat arrays. `regions` (colour grouping) and
 `depth` (0 at the surface, 1 deep) are optional. Positions are centred and
 scaled on load, so any units work. `public/sample-graph.json` is a worked
-example: `?dataset=/sample-graph.json`.
+example: `?dataset=sample-graph.json`.
 
 For large data, any field can instead be a binary typed array in plotly's
 format, which is what plotly.py writes for numpy arrays:

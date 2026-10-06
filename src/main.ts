@@ -193,7 +193,7 @@ let building = false;
 const builder = new GraphBuilder();
 
 function currentRequest(): GraphRequest {
-  // `?dataset=/my-graph.json` loads a network from data instead of generating
+  // `?dataset=my-graph.json` loads a network from data instead of generating
   // one. Everything downstream reads the same NetworkGraph either way.
   const dataset = new URLSearchParams(window.location.search).get('dataset');
   if (dataset) return { kind: 'dataset', url: new URL(dataset, window.location.href).href };
