@@ -102,8 +102,8 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'autoRotate').name('drift');
   look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
   look.add(l, 'neurons').name('neurons');
-  look.add(l, 'cellDensity', 0.005, 0.2, 0.005).name('cell density');
-  look.add(l, 'cellSize', 0.004, 0.04, 0.001).name('cell size');
+  look.add(l, 'cellDensity', 0.01, 1, 0.01).name('cell density');
+  look.add(l, 'cellSize', 0.0008, 0.02, 0.0001).name('cell size');
   look.onChange(() => handlers.onLookChange());
 
   gui.add({ fire: () => handlers.onStimulate() }, 'fire').name('fire a node');
