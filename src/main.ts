@@ -74,6 +74,7 @@ const state: PanelState = {
     // that are actually close fuse.
     cellDensity: 1,
     cellSize: 0.0018,
+    cellZoom: 0.75,
   },
 };
 
@@ -118,6 +119,8 @@ renderer.setClearColor(PALETTE.background, 1);
 const scene = new Scene();
 const camera = new PerspectiveCamera(42, 1, 0.01, 50);
 camera.position.set(1.35, 0.42, 1.5);
+/** Opening camera distance: cell sizes are given as seen from here. */
+const HOME_DISTANCE = camera.position.length();
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -272,6 +275,8 @@ function layOutNeurons(): void {
   const layout = layoutNeurons(graph, { fraction: state.look.cellDensity });
   membraneLayer = new MembraneLayer(sim, layout, nodeLayer.geometry, nodeTextures, {
     cellSize: state.look.cellSize,
+    cellZoom: state.look.cellZoom,
+    referenceDistance: HOME_DISTANCE,
   });
   membranePass.layer = membraneLayer;
   laidOutDensity = state.look.cellDensity;
@@ -303,7 +308,7 @@ function applyLook(): void {
     clearTimeout(relayoutTimer);
     relayoutTimer = window.setTimeout(layOutNeurons, 150);
   }
-  membraneLayer?.setCellSize(look.cellSize);
+  membraneLayer?.setCellSize(look.cellSize, look.cellZoom);
   wake();
 }
 
