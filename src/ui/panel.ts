@@ -47,6 +47,10 @@ export interface LookSettings {
   cellSize: number;
   /** 0 keeps cells a fixed size in the brain, 1 a fixed size on screen. */
   cellZoom: number;
+  /** How much the far side of the brain darkens, activation included. */
+  depth: number;
+  /** Vertical field of view in degrees; changed as a dolly zoom. */
+  fov: number;
 }
 
 export interface PanelHandlers {
@@ -92,6 +96,8 @@ const HELP: Record<string, string> = {
   pulseIntensity: 'Brightness of signals travelling along synapses.',
   cometLength: 'Length of the bright tail behind each travelling signal.',
   bloom: 'Strength of the soft glow around bright things.',
+  depth: 'How much the far side of the brain darkens, so the near side reads in front. Applies to waves too: activation at the back glows dimmer.',
+  fov: 'Field of view in degrees. Wider exaggerates perspective; the camera moves so the brain keeps its size on screen.',
   autoRotate: 'Slowly turn the brain when you are not touching it.',
   restFps: 'Frame rate when only the slow drift is moving, to save power. 0 always draws every frame.',
   neurons: 'Draw some neurons as gooey cells, joined by neurites that merge like liquid.',
@@ -143,6 +149,8 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'pulseIntensity', 0, 4, 0.05).name('pulse glow');
   look.add(l, 'cometLength', 0.01, 0.3, 0.005).name('comet length');
   look.add(l, 'bloom', 0, 2, 0.02);
+  look.add(l, 'depth', 0, 1, 0.01).name('depth fade');
+  look.add(l, 'fov', 15, 90, 1).name('perspective (fov)');
   look.add(l, 'autoRotate').name('drift');
   look.add(l, 'restFps', 0, 60, 1).name('resting fps (0 = off)');
   look.add(l, 'neurons').name('neurons');

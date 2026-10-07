@@ -22,6 +22,7 @@ import {
   vertexCountCarrier,
   type NodeTextures,
 } from './node-textures';
+import { DEPTH_CUE_GLSL, depthUniforms } from './depth';
 import { PALETTE } from './palette';
 
 const vertexShader = /* glsl */ `
@@ -30,6 +31,7 @@ const vertexShader = /* glsl */ `
   uniform int uEdgesWidth;
   uniform float uTractLength;
   uniform vec3 uTractColor;
+  ${DEPTH_CUE_GLSL}
 
   varying vec3 vColor;
   varying float vFade;
@@ -51,7 +53,9 @@ const vertexShader = /* glsl */ `
     // Deep wires recede so the surface structure reads first.
     vFade = (tract ? 0.85 : 1.0) * (1.0 - 0.55 * end.w);
 
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(end.xyz, 1.0);
+    vec4 mv = modelViewMatrix * vec4(end.xyz, 1.0);
+    vFade *= depthCue(mv.z);
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
@@ -103,6 +107,7 @@ export class EdgeLayer {
         uOpacity: { value: opacity },
         uTractLength: { value: graph.bounds * tractThreshold },
         uTractColor: { value: PALETTE.tract.clone() },
+        ...depthUniforms,
       },
       transparent: true,
       depthWrite: false,

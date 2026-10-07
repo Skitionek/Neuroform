@@ -20,12 +20,14 @@ import {
 } from 'three';
 import type { NetworkSim } from '../sim/network';
 import { NODE_FETCH_GLSL, setPulledBounds, vertexCountCarrier, type NodeTextures } from './node-textures';
+import { DEPTH_CUE_GLSL, depthUniforms } from './depth';
 import { PALETTE } from './palette';
 
 const vertexShader = /* glsl */ `
   ${NODE_FETCH_GLSL}
   uniform float uTime;
   uniform float uCometLength;
+  ${DEPTH_CUE_GLSL}
 
   // Two vertices per pulse: even ids at the firing end, odd at the receiving.
   attribute vec2 aEnds;    // from node, to node
@@ -35,6 +37,7 @@ const vertexShader = /* glsl */ `
   varying float vHead;
   varying float vAmp;
   varying float vSpan;
+  varying float vCue;
 
   void main() {
     vec3 a = nodePosition(aEnds.x).xyz;
@@ -45,7 +48,9 @@ const vertexShader = /* glsl */ `
     // Comet length in the edge's own 0..1 parameter space, so a long tract
     // gets a long streak and a short synapse a compact spark.
     vSpan = min(1.0, uCometLength / max(1e-4, length(b - a)));
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(mix(a, b, vT), 1.0);
+    vec4 mv = modelViewMatrix * vec4(mix(a, b, vT), 1.0);
+    vCue = depthCue(mv.z);
+    gl_Position = projectionMatrix * mv;
   }
 `;
 
@@ -57,6 +62,7 @@ const fragmentShader = /* glsl */ `
   varying float vHead;
   varying float vAmp;
   varying float vSpan;
+  varying float vCue;
 
   void main() {
     // Bright head at the signal's current position along the wire...
@@ -67,7 +73,7 @@ const fragmentShader = /* glsl */ `
     float behind = max(0.0, vHead - vT) / max(0.02, vSpan * 3.0);
     float tail = exp(-behind) * step(vT, vHead) * 0.55;
 
-    float glow = (head + tail) * vAmp * uIntensity;
+    float glow = (head + tail) * vAmp * uIntensity * vCue;
     if (glow < 0.004) discard;
 
     gl_FragColor = vec4(uColor * glow, clamp(glow, 0.0, 1.0));
@@ -120,6 +126,7 @@ export class PulseLayer {
         uCometLength: { value: cometLength },
         uColor: { value: PALETTE.pulse.clone() },
         uIntensity: { value: intensity },
+        ...depthUniforms,
       },
       transparent: true,
       depthWrite: false,

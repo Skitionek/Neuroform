@@ -227,6 +227,9 @@ export class PulsePool {
   }
 }
 
+/** Seed of the simulation's random stream (synapse reliability, idle firing). */
+const RNG_SEED = 1337;
+
 export class NetworkSim {
   readonly graph: NetworkGraph;
   params: SimParams;
@@ -246,7 +249,7 @@ export class NetworkSim {
   private chargeAt: Float32Array;
   private lastFire: Float32Array;
   private time = 0;
-  private rng = new Rng(1337);
+  private rng = new Rng(RNG_SEED);
   private arrival = new Float64Array(3);
 
   /** Rolling counters for the readout. */
@@ -303,8 +306,12 @@ export class NetworkSim {
   /** -ln 2 / half-life, refreshed each step so live param edits apply. */
   private glowRate = -Math.LN2 / DEFAULT_PARAMS.glow;
 
-  /** Clears all activity, leaving the wiring alone. */
+  /**
+   * Clears all activity, leaving the wiring alone, and reseeds the random
+   * stream, so the same stimuli after a reset play out the same way.
+   */
   reset(): void {
+    this.rng = new Rng(RNG_SEED);
     this.charge.fill(0);
     this.chargeAt.fill(0);
     this.lastFire.fill(-1e9);

@@ -45,6 +45,7 @@ import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js'
 import type { NeuronLayout } from '../graph/neurons';
 import type { DirtySet } from '../core/dirty';
 import type { NetworkSim } from '../sim/network';
+import { DEPTH_CUE_GLSL, depthUniforms } from './depth';
 import type { GpuTimer } from './gpu-timer';
 import {
   DATA_TEXTURE_WIDTH,
@@ -96,6 +97,7 @@ const somaVertex = /* glsl */ `
   uniform vec3 uCentre;
   uniform vec3 uViewDir;
   uniform float uDepthSlack;
+  ${DEPTH_CUE_GLSL}
   varying vec3 vColor;
   varying float vSeed;
   varying float vFade;
@@ -120,7 +122,7 @@ const somaVertex = /* glsl */ `
     // At least ~1.5 px across, so small distant cells stay visible.
     float rPx = max(r * uProjScale / max(0.05, -mv.z), 0.75);
     gl_PointSize = 2.0 * ${SPRITE.toFixed(2)} * rPx;
-    vColor = mix(aTissue * (0.8 + 0.4 * (1.0 - aDepth)), SIGNAL, act);
+    vColor = mix(aTissue * (0.8 + 0.4 * (1.0 - aDepth)), SIGNAL, act) * depthCue(mv.z);
     vSeed = aSeed;
   }
 `;
@@ -169,7 +171,9 @@ const neuriteVertex = /* glsl */ `
   uniform vec3 uCentre;
   uniform vec3 uViewDir;
   uniform float uDepthSlack;
+  ${DEPTH_CUE_GLSL}
   varying float vFade;
+  varying float vCue;
   varying float vT;
   varying float vAcross;
   varying float vWidthA;
@@ -205,6 +209,8 @@ const neuriteVertex = /* glsl */ `
     if (vFade <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
     vec4 va = modelViewMatrix * vec4(a, 1.0);
     vec4 vb = modelViewMatrix * vec4(b, 1.0);
+    float cueA = depthCue(va.z);
+    float cueB = depthCue(vb.z);
     #ifndef DEPTH_PREPASS
     va.z += uDepthSlack;
     vb.z += uDepthSlack;
@@ -239,6 +245,7 @@ const neuriteVertex = /* glsl */ `
     vWidthA = ra;
     vWidthB = rb;
     vColor = mix(nodeTissue(ends.x), nodeTissue(ends.y), t);
+    vCue = mix(cueA, cueB, t);
     vGlowA = nodeGlow(ends.x);
     vGlowB = nodeGlow(ends.y);
   }
@@ -248,6 +255,7 @@ const neuriteFragment = /* glsl */ `
   varying float vGlowA;
   varying float vGlowB;
   varying float vFade;
+  varying float vCue;
   varying float vT;
   varying float vAcross;
   varying float vWidthA;
@@ -267,7 +275,7 @@ const neuriteFragment = /* glsl */ `
     if (d < 0.004) discard;
     // A firing soma lights its neurites, fading along them from its end.
     float glow = max(vGlowA * (1.0 - vT) * (1.0 - vT), vGlowB * vT * vT);
-    gl_FragColor = vec4(mix(vColor, SIGNAL, glow) * d, d);
+    gl_FragColor = vec4(mix(vColor, SIGNAL, glow) * vCue * d, d);
   }
 `;
 
@@ -371,6 +379,7 @@ export class MembraneLayer {
         uCentre: this.centre,
         uViewDir: this.viewDir,
         uDepthSlack: this.depthSlack,
+        ...depthUniforms,
       },
     };
     this.somaMaterial = new ShaderMaterial({ ...somaShader, ...densityParams });
@@ -422,6 +431,7 @@ export class MembraneLayer {
         uCentre: this.centre,
         uViewDir: this.viewDir,
         uDepthSlack: this.depthSlack,
+        ...depthUniforms,
       },
     };
     this.neuriteMaterial = new ShaderMaterial({ ...neuriteShader, ...densityParams });
@@ -435,9 +445,10 @@ export class MembraneLayer {
     this.depthScene.add(neuriteCores, somaCores);
   }
 
-  setCellSize(radius: number, cellZoom = this.cellZoom): void {
+  setCellSize(radius: number, cellZoom = this.cellZoom, referenceDistance = this.referenceDistance): void {
     this.baseRadius = radius;
     this.cellZoom = cellZoom;
+    this.referenceDistance = referenceDistance;
   }
 
   /** Cell radius in model units for a camera `distance` from the brain's centre. */
