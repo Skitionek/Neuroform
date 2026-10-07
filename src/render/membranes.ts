@@ -65,11 +65,18 @@ import { PALETTE } from './palette';
  * the threshold smoothly as the brain turns rather than popping out.
  */
 const NEAR_FADE_GLSL = /* glsl */ `
+  uniform float uNearFadeFrom;
   float nearFade(vec3 p) {
     float side = dot(p - uCentre, uViewDir);
-    return smoothstep(-0.02, 0.12, side);
+    return smoothstep(uNearFadeFrom, 0.12, side);
   }
 `;
+
+/**
+ * Merged cell radius, in typical node spacings. Gaussians this wide overlap
+ * enough that their sum is nearly flat, so the cells read as one mass.
+ */
+const FUSED_RADIUS = 1.1;
 
 /** Smallest typical cell radius, in density pixels, before resolution drops. */
 const MIN_CELL_PX = 2.5;
@@ -333,6 +340,11 @@ export class MembraneLayer {
   // Shared by both materials.
   private centre = { value: new Vector3() };
   private viewDir = { value: new Vector3(0, 0, 1) };
+  private nearFadeFrom = { value: -0.02 };
+  /** 0: separate cells; 1: one merged mass. Set from the zoom by the caller. */
+  private merge = 0;
+  /** Typical distance between neighbouring nodes, model units. */
+  private spacing: number;
   private baseRadius: number;
   private cellZoom: number;
   private referenceDistance: number;
@@ -353,6 +365,7 @@ export class MembraneLayer {
     this.baseRadius = radius;
     this.cellZoom = options.cellZoom ?? 1;
     this.referenceDistance = options.referenceDistance ?? 2;
+    this.spacing = medianSample(sim.graph.edgeLength);
     nodeGeometry.computeBoundingSphere();
     this.centre.value.copy(nodeGeometry.boundingSphere!.center);
     const signal = PALETTE.signal;
@@ -377,6 +390,7 @@ export class MembraneLayer {
         uRadius: { value: radius },
         uProjScale: { value: 1 },
         uCentre: this.centre,
+        uNearFadeFrom: this.nearFadeFrom,
         uViewDir: this.viewDir,
         uDepthSlack: this.depthSlack,
         ...depthUniforms,
@@ -429,6 +443,7 @@ export class MembraneLayer {
         uRadius: { value: radius },
         uProjScale: { value: 1 },
         uCentre: this.centre,
+        uNearFadeFrom: this.nearFadeFrom,
         uViewDir: this.viewDir,
         uDepthSlack: this.depthSlack,
         ...depthUniforms,
@@ -465,12 +480,26 @@ export class MembraneLayer {
     return (1.2 * this.radiusAt(distance) * projScale) / distance;
   }
 
+  /**
+   * How far the cells have merged into one mass, 0 to 1. Zoomed out, the
+   * brain should read as a single uniform shape; zoomed in, as neurons.
+   */
+  setMerge(merge: number): void {
+    this.merge = Math.min(1, Math.max(0, merge));
+  }
+
   private applyRadius(distance: number): void {
-    const radius = this.radiusAt(distance);
+    const own = this.radiusAt(distance);
+    // Merging, cells swell toward the node spacing, so the density between
+    // them fills in, and fuse across more depth, so the mass is solid.
+    const fused = Math.max(own, FUSED_RADIUS * this.spacing);
+    const radius = own + (fused - own) * this.merge;
     this.somaMaterial.uniforms.uRadius.value = radius;
     this.neuriteMaterial.uniforms.uRadius.value = radius;
     // Blobs this close in depth merge; anything further behind is hidden.
-    this.depthSlack.value = 2.2 * radius;
+    this.depthSlack.value = 2.2 * radius * (1 + 2 * this.merge);
+    // And cells reach round to the silhouette, so its edge is whole.
+    this.nearFadeFrom.value = -0.02 - 0.3 * this.merge;
   }
 
   /** Per-frame uniforms, for a density target `width` x `height` pixels. */
@@ -674,4 +703,15 @@ export class MembranePass extends Pass {
     this.quad.material.dispose();
     this.quad.dispose();
   }
+}
+
+/** Median of a sample of up to 4096 values; 0 for an empty array. */
+function medianSample(values: Float32Array): number {
+  if (values.length === 0) return 0;
+  const n = Math.min(4096, values.length);
+  const stride = values.length / n;
+  const sample = new Float32Array(n);
+  for (let i = 0; i < n; i++) sample[i] = values[Math.floor(i * stride)];
+  sample.sort();
+  return sample[n >> 1];
 }

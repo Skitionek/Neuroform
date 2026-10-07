@@ -47,6 +47,8 @@ export interface LookSettings {
   cellSize: number;
   /** 0 keeps cells a fixed size in the brain, 1 a fixed size on screen. */
   cellZoom: number;
+  /** How far cells merge into one mass when zoomed out, 0 to 1. */
+  merge: number;
   /** How much the far side of the brain darkens, activation included. */
   depth: number;
   /** Vertical field of view in degrees; changed as a dolly zoom. */
@@ -104,6 +106,7 @@ const HELP: Record<string, string> = {
   cellDensity: 'Share of neurons drawn as cells.',
   cellSize: 'Size of a cell body, as seen from the opening view.',
   cellZoom: 'How cells react to zoom: 0 keeps their size in the brain, so they grow as you close in; 1 keeps their size on screen.',
+  merge: 'Zoomed out, cells merge into one uniform brain shape and the dots and synapses fade into it; zoomed in, it comes apart into single neurons. Starts at the opening view, complete at three times its distance. 0 turns it off.',
   fire: 'Fire a random neuron, as if you had clicked it.',
   reset: 'Stop every signal and let the network go dark.',
 };
@@ -157,6 +160,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'cellDensity', 0.01, 1, 0.01).name('cell density');
   look.add(l, 'cellSize', 0.0002, 0.01, 0.0001).name('cell size');
   look.add(l, 'cellZoom', 0, 1, 0.05).name('cells follow zoom');
+  look.add(l, 'merge', 0, 1, 0.05).name('merge when far');
   look.onChange(() => handlers.onLookChange());
 
   gui.add({ fire: () => handlers.onStimulate() }, 'fire').name('fire a node');
