@@ -1,16 +1,10 @@
 # TODO
 
-## Refine the brain shape: pick one
-Three shapes are now selectable with `shape`: `classic`, `anatomical`
-(procedural: lobes, longitudinal and lateral fissures, central sulcus,
-contour-line gyri, cerebellum with vermis and curved folia, stem with pons)
-and `scan` (signed distance field from the MNI ICBM152 template). Waiting on
-the user's choice of default, from the renders in `docs/renders/`.
-- Folds do not read in any shape at 55k nodes with cells on, even with
-  `fill 0`. Showing gyri needs rendering work: shading by surface depth or
-  curvature, or fewer and larger surface cells.
-- `anatomical` still has a slight lip where the temporal lobe meets the
-  body, seen from slightly above.
+## Show the folds
+`scan` is the default shape now, but its gyri do not read at 55k nodes with
+cells on, even with `fill 0`: the surface looks speckled. Showing them needs
+rendering work, such as shading by depth below the surface or by curvature,
+or fewer and larger surface cells.
 
 ## Dark and light themes
 Background colour becomes a setting, or the scene renders with an alpha
@@ -31,3 +25,6 @@ colour; they could be looked up per node instead of carried per pixel.
 - Zoom-based goo: zoomed out, the cells merge into one uniform brain mass and
   dots and synapses fade into it; zoomed in, it resolves into neurons
   (`merge`).
+- Brain shape: `scan` (MNI ICBM152, 77 kB half grid at 2 mm) is the default;
+  `anatomical` and `classic` stay selectable. If the grid cannot load, the
+  app falls back to `anatomical`.

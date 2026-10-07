@@ -17,8 +17,15 @@ export async function buildGraph(request: GraphRequest): Promise<NetworkGraph> {
   if (request.kind === 'procedural') {
     let grid;
     if (request.options.shape === 'scan') {
-      if (!request.scanUrl) throw new Error('the scan shape needs scanUrl');
-      grid = await loadBrainGrid(request.scanUrl);
+      try {
+        if (!request.scanUrl) throw new Error('no scanUrl given');
+        grid = await loadBrainGrid(request.scanUrl);
+      } catch (error) {
+        // Offline, blocked, or an old browser without DecompressionStream:
+        // the procedural anatomy is the closest stand-in.
+        console.warn('scan brain unavailable, using the anatomical shape:', error);
+        return proceduralBrain({ ...request.options, shape: 'anatomical' }).load();
+      }
     }
     return proceduralBrain({ ...request.options, grid }).load();
   }

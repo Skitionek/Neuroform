@@ -3,8 +3,8 @@
  * template (see scripts/build-brain-sdf.py), so nodes fill a real brain's
  * volume, folds, fissures and all, instead of a procedural approximation.
  *
- * The grid is about 1.5 mm per voxel and ships gzipped (~650 kB); it is
- * fetched only when the scan shape is chosen.
+ * The template is symmetric, so only the right half is stored and x is
+ * mirrored. It is fetched only when the scan shape is chosen.
  */
 
 /** A signed distance grid in model space, with a region label per voxel. */
@@ -12,7 +12,7 @@ export interface BrainGrid {
   nx: number;
   ny: number;
   nz: number;
-  /** Model-space position of voxel (0, 0, 0). */
+  /** Model-space position of voxel (0, 0, 0); x is 0, the midline. */
   origin: [number, number, number];
   /** Voxel size, model units. */
   voxel: number;
@@ -23,7 +23,7 @@ export interface BrainGrid {
   region: Uint8Array;
 }
 
-const MAGIC = 'NFSDF1';
+const MAGIC = 'NFSDF2';
 const HEADER_BYTES = 32;
 
 /** Parses the uncompressed file written by scripts/build-brain-sdf.py. */
@@ -44,11 +44,17 @@ export function parseBrainGrid(buffer: ArrayBuffer): BrainGrid {
   const step = view.getFloat32(28, true);
   const n = nx * ny * nz;
   if (buffer.byteLength < HEADER_BYTES + 2 * n) throw new Error('brain grid is truncated');
-  return {
-    nx, ny, nz, origin, voxel, step,
-    sdf: new Int8Array(buffer, HEADER_BYTES, n),
-    region: new Uint8Array(buffer, HEADER_BYTES + n, n),
-  };
+  // Rows are delta coded along x: the running sum is the distance.
+  const deltas = new Int8Array(buffer, HEADER_BYTES, n);
+  const sdf = new Int8Array(n);
+  for (let row = 0; row < n; row += nx) {
+    let v = 0;
+    for (let i = row; i < row + nx; i++) {
+      v += deltas[i];
+      sdf[i] = v;
+    }
+  }
+  return { nx, ny, nz, origin, voxel, step, sdf, region: new Uint8Array(buffer, HEADER_BYTES + n, n) };
 }
 
 const cache = new Map<string, Promise<BrainGrid>>();
@@ -74,14 +80,17 @@ export function loadBrainGrid(url: string): Promise<BrainGrid> {
   return grid;
 }
 
+/** Distance reported outside the grid: anything positive will do. */
+const OUTSIDE = 0.1;
+
 /** Signed distance at a model-space point: trilinear inside the grid. */
 export function gridDistance(g: BrainGrid, x: number, y: number, z: number): number {
-  const fx = (x - g.origin[0]) / g.voxel;
+  const fx = (Math.abs(x) - g.origin[0]) / g.voxel;
   const fy = (y - g.origin[1]) / g.voxel;
   const fz = (z - g.origin[2]) / g.voxel;
-  // Outside the grid: at least the margin the grid was built with.
+  // Outside the grid: outside the brain, by at least the grid's margin.
   if (fx < 0 || fy < 0 || fz < 0 || fx >= g.nx - 1 || fy >= g.ny - 1 || fz >= g.nz - 1) {
-    return 127 * g.step;
+    return OUTSIDE;
   }
   const ix = fx | 0, iy = fy | 0, iz = fz | 0;
   const tx = fx - ix, ty = fy - iy, tz = fz - iz;
@@ -99,7 +108,7 @@ export function gridDistance(g: BrainGrid, x: number, y: number, z: number): num
 
 /** Region label of the voxel nearest a point; 0 (cortex) outside labelled tissue. */
 export function gridRegion(g: BrainGrid, x: number, y: number, z: number): number {
-  const ix = Math.round((x - g.origin[0]) / g.voxel);
+  const ix = Math.round((Math.abs(x) - g.origin[0]) / g.voxel);
   const iy = Math.round((y - g.origin[1]) / g.voxel);
   const iz = Math.round((z - g.origin[2]) / g.voxel);
   if (ix < 0 || iy < 0 || iz < 0 || ix >= g.nx || iy >= g.ny || iz >= g.nz) return 0;
@@ -107,11 +116,12 @@ export function gridRegion(g: BrainGrid, x: number, y: number, z: number): numbe
   return r === 255 ? 0 : r;
 }
 
-/** Model-space bounding box of the grid. */
+/** Model-space bounding box of the grid, mirrored half included. */
 export function gridBox(g: BrainGrid): { x: [number, number]; y: [number, number]; z: [number, number] } {
   const [ox, oy, oz] = g.origin;
+  const half = ox + (g.nx - 1) * g.voxel;
   return {
-    x: [ox, ox + (g.nx - 1) * g.voxel],
+    x: [-half, half],
     y: [oy, oy + (g.ny - 1) * g.voxel],
     z: [oz, oz + (g.nz - 1) * g.voxel],
   };
