@@ -78,6 +78,7 @@ const state: PanelState = {
     cellSize: 0.003,
     cellZoom: 1,
     depth: 0.7,
+    merge: 1,
     fov: 55,
   },
 };
@@ -309,11 +310,30 @@ function applySignal(): void {
   wake();
 }
 
+/** Synapse opacity from the look, before zoom merging fades it. */
+let edgeOpacity = 0;
+
+/**
+ * Zoomed out, the cells merge into one brain-shaped mass and the dots and
+ * synapses fade into it; zoomed in, they come apart into neurons. 0 at the
+ * opening view and closer, 1 from three times that distance out.
+ */
+function applyMerge(distance: number): void {
+  const home = homeDistance();
+  const t = Math.min(1, Math.max(0, (distance - home) / (2 * home)));
+  const merge = state.look.neurons ? state.look.merge * t * t * (3 - 2 * t) : 0;
+  membraneLayer?.setMerge(merge);
+  // Resting tissue fades into the mass; activation still shows through.
+  nodeLayer.material.uniforms.uDim.value = 1 - 0.85 * merge;
+  edgeLayer.setOpacity(edgeOpacity * (1 - merge));
+}
+
 function applyLook(): void {
   const { look } = state;
   const scaled = scaleLook(look, graph.nodeCount);
   nodeLayer.material.uniforms.uSize.value = scaled.pointSize;
-  edgeLayer.setOpacity(scaled.edgeOpacity);
+  edgeOpacity = scaled.edgeOpacity;
+  edgeLayer.setOpacity(edgeOpacity);
   pulseLayer.setIntensity(scaled.pulseIntensity);
   pulseLayer.setCometLength(scaled.cometLength);
   bloom.strength = look.bloom;
@@ -507,6 +527,7 @@ function frame(): void {
   controls.update(Math.min(dt, 0.1));
   const sphere = nodeLayer.geometry.boundingSphere!;
   updateDepthCue(camera, sphere.center, sphere.radius, state.look.depth);
+  applyMerge(camera.position.distanceTo(sphere.center));
   if (window.neuroform.postprocessing) {
     composer.render();
   } else {

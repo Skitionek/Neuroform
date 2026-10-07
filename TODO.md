@@ -11,14 +11,6 @@ gyri, a ridged cerebellum and a capsule stem. Make it read as a brain:
 - Option: sample from a real brain surface, for example an SDF built from
   an MNI template mesh.
 
-## Zoom-based goo should go from brain to neurons
-Goal: fully zoomed out, the cells merge into one uniform brain-shaped mass.
-Zooming in, it resolves into individual neurons. `cellZoom` only keeps
-cells a fixed size on screen today. The merge radius (cell size and depth
-slack) needs to grow with distance enough to fuse at the far end and shrink
-up close. Check whether the near-half fade and the far-side cells allow a
-solid silhouette.
-
 ## Dark and light themes
 Background colour becomes a setting, or the scene renders with an alpha
 channel so it can sit on any page. A light theme needs more than a new
@@ -33,3 +25,8 @@ density buffer, RGBA half-float, written with additive blending every frame
 and the costliest pass. A single-channel buffer moves a quarter of the
 bytes. Measure the gain against losing the cells' region tint and glow
 colour; they could be looked up per node instead of carried per pixel.
+
+## Done
+- Zoom-based goo: zoomed out, the cells merge into one uniform brain mass and
+  dots and synapses fade into it; zoomed in, it resolves into neurons
+  (`merge`).
