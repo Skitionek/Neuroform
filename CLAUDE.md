@@ -1,5 +1,10 @@
 # Neuroform: notes for contributors
 
+## Answer every question
+
+When a message mixes questions with tasks, answer every question explicitly,
+even the ones asked in passing. Open work lives in `TODO.md`; keep it current.
+
 ## Every PR needs before and after renders
 
 Every pull request must include **before** and **after** renders of the
