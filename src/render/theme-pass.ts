@@ -24,6 +24,16 @@ export const THEME_BACKGROUND: Record<Theme, string> = {
   light: '#f3f1ec',
 };
 
+/**
+ * Default resting brain colour per theme (the cortex; the cerebellum and stem
+ * follow it). On paper the light becomes ink, so the light theme's is a
+ * brighter blue that inks a clearer tint.
+ */
+export const THEME_BRAIN: Record<Theme, string> = {
+  dark: '#3d4a8f',
+  light: '#5465c4',
+};
+
 const fragmentShader = /* glsl */ `
   uniform sampler2D tDiffuse;
   uniform vec3 uBackground;  // linear
