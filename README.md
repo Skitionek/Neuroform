@@ -177,6 +177,7 @@ The pulse pool grows with the network so big waves are not clipped.
 | | |
 |---|---|
 | `nodes`, `seed` | how many points, and which brain |
+| `shape` | `classic` (egg with noise folds), `anatomical` (lobes, fissures, named sulci) or `scan` (a real brain, from the MNI ICBM152 template) |
 | `foldDepth`, `foldScale`, `shell` | how deep and how fine the gyri, how thick the surface layer |
 | `fill` | `1` fills the volume evenly, `0` crowds nodes into the surface layer |
 | `minDegree`, `maxDegree`, `radius` | synapses per node and how far they reach |
@@ -196,3 +197,11 @@ The pulse pool grows with the network so big waves are not clipped.
 `window.neuroform` exposes the graph, the simulation and the layers for driving
 the piece from a script: `stimulate(node?)`, `reset()`,
 `look({ bloom: 1 })` and `rebuild({ nodes: 60000, seed: 3 })`.
+
+## Credits
+
+The `scan` brain shape is derived from the MNI ICBM152 2009a nonlinear
+symmetric template (Fonov et al., NeuroImage 2009), copyright (C) 1993-2004
+Louis Collins, McConnell Brain Imaging Centre, Montreal Neurological
+Institute, McGill University; see `public/brain-mni152.LICENSE.txt`.
+`scripts/build-brain-sdf.py` regenerates it.

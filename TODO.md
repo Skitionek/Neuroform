@@ -1,15 +1,16 @@
 # TODO
 
-## Refine the brain shape
-The current shape is too simplistic: an ellipsoid cerebrum with noise for
-gyri, a ridged cerebellum and a capsule stem. Make it read as a brain:
-- Distinct lobes (frontal, parietal, temporal, occipital).
-- A real longitudinal fissure between the hemispheres.
-- A lateral (Sylvian) fissure separating the temporal lobe.
-- Gyri and sulci that follow the anatomy instead of isotropic noise.
-- A cerebellum and brainstem with proper proportions and attachment.
-- Option: sample from a real brain surface, for example an SDF built from
-  an MNI template mesh.
+## Refine the brain shape: pick one
+Three shapes are now selectable with `shape`: `classic`, `anatomical`
+(procedural: lobes, longitudinal and lateral fissures, central sulcus,
+contour-line gyri, cerebellum with vermis and curved folia, stem with pons)
+and `scan` (signed distance field from the MNI ICBM152 template). Waiting on
+the user's choice of default, from the renders in `docs/renders/`.
+- Folds do not read in any shape at 55k nodes with cells on, even with
+  `fill 0`. Showing gyri needs rendering work: shading by surface depth or
+  curvature, or fewer and larger surface cells.
+- `anatomical` still has a slight lip where the temporal lobe meets the
+  body, seen from slightly above.
 
 ## Dark and light themes
 Background colour becomes a setting, or the scene renders with an alpha

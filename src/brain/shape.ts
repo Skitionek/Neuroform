@@ -12,13 +12,28 @@
  */
 import { Noise3 } from '../core/noise';
 import { Rng } from '../core/rng';
+import { ANATOMICAL_BOXES, anatomicalFields } from './anatomical';
+import { gridBox, gridDistance, gridRegion, type BrainGrid } from './scan';
+import { EPS, NOISE_MAX, len3, sdBox, sdCapsule, sdEllipsoid, smax, smin, type Box, type Field, type FieldConfig } from './sdf';
 
 export const REGION = { CORTEX: 0, CEREBELLUM: 1, STEM: 2 } as const;
 export type Region = (typeof REGION)[keyof typeof REGION];
 
+/**
+ * Which brain: `classic` is the original egg with ridged-noise folds,
+ * `anatomical` is built from lobes, fissures and named sulci, and `scan` fills
+ * a real brain from the MNI ICBM152 template (its grid must be loaded first,
+ * see scan.ts).
+ */
+export type BrainShape = 'classic' | 'anatomical' | 'scan';
+export const BRAIN_SHAPES: readonly BrainShape[] = ['classic', 'anatomical', 'scan'];
+
 export interface BrainSampleOptions {
   /** How many points to place. */
   count: number;
+  shape?: BrainShape;
+  /** The scan shape's distance grid; required when `shape` is 'scan'. */
+  grid?: BrainGrid;
   seed?: number;
   /**
    * Depth below the surface over which a node goes from surface to deep, in
@@ -52,70 +67,8 @@ export interface BrainCloud {
   bounds: number;
 }
 
-/* ---------------------------------------------------------------- primitives */
-
-/**
- * Euclidean length. Not Math.hypot: hypot guards against overflow, which never
- * matters at these magnitudes, and costs 12x as much in V8. The sampler calls
- * this millions of times per build.
- */
-function len3(x: number, y: number, z: number): number {
-  return Math.sqrt(x * x + y * y + z * z);
-}
-
-function sdEllipsoid(
-  px: number, py: number, pz: number,
-  cx: number, cy: number, cz: number,
-  rx: number, ry: number, rz: number,
-): number {
-  const x = px - cx, y = py - cy, z = pz - cz;
-  const k0 = len3(x / rx, y / ry, z / rz);
-  const k1 = len3(x / (rx * rx), y / (ry * ry), z / (rz * rz));
-  if (k1 === 0) return -Math.min(rx, ry, rz);
-  return (k0 * (k0 - 1)) / k1;
-}
-
-function sdBox(
-  px: number, py: number, pz: number,
-  cx: number, cy: number, cz: number,
-  hx: number, hy: number, hz: number,
-): number {
-  const qx = Math.abs(px - cx) - hx;
-  const qy = Math.abs(py - cy) - hy;
-  const qz = Math.abs(pz - cz) - hz;
-  const outside = len3(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0));
-  return outside + Math.min(Math.max(qx, Math.max(qy, qz)), 0);
-}
-
-function sdCapsule(
-  px: number, py: number, pz: number,
-  ax: number, ay: number, az: number,
-  bx: number, by: number, bz: number,
-  ra: number, rb: number,
-): number {
-  const pax = px - ax, pay = py - ay, paz = pz - az;
-  const bax = bx - ax, bay = by - ay, baz = bz - az;
-  const denom = bax * bax + bay * bay + baz * baz;
-  const h = denom === 0 ? 0 : Math.min(1, Math.max(0, (pax * bax + pay * bay + paz * baz) / denom));
-  const dx = pax - bax * h, dy = pay - bay * h, dz = paz - baz * h;
-  return len3(dx, dy, dz) - (ra + (rb - ra) * h);
-}
-
-/** Smooth union. */
-function smin(a: number, b: number, k: number): number {
-  const h = Math.min(1, Math.max(0, 0.5 + (0.5 * (b - a)) / k));
-  return b * (1 - h) + a * h - k * h * (1 - h);
-}
-
-/** Smooth intersection. */
-function smax(a: number, b: number, k: number): number {
-  const h = Math.min(1, Math.max(0, 0.5 - (0.5 * (b - a)) / k));
-  return b * (1 - h) + a * h + k * h * (1 - h);
-}
-
 /* --------------------------------------------------------------- the fields */
 
-interface Box { x: [number, number]; y: [number, number]; z: [number, number] }
 
 /** The whole brain. The cortex is sampled from this. */
 const BOX: Box = { x: [-0.46, 0.46], y: [-0.62, 0.46], z: [-0.62, 0.62] };
@@ -133,39 +86,6 @@ const BOX: Box = { x: [-0.46, 0.46], y: [-0.62, 0.46], z: [-0.62, 0.62] };
  */
 const CEREBELLUM_BOX: Box = { x: [-0.3, 0.3], y: [-0.49, -0.14], z: [-0.56, -0.1] };
 const STEM_BOX: Box = { x: [-0.12, 0.12], y: [-0.62, -0.04], z: [-0.27, 0.02] };
-
-/**
- * Upper bound on |simplex| (and therefore on normalised fbm). Measured maximum
- * over 10M samples is 0.973; the margin makes the bounds below safe, and the
- * sampler's output is checked bit-for-bit against the unbounded version.
- */
-const NOISE_MAX = 1.1;
-/** Guard against rounding flipping a decision exactly at a bound. */
-const EPS = 1e-9;
-
-interface FieldConfig {
-  foldDepth: number;
-  foldScale: number;
-}
-
-/**
- * A region of the brain. `exact` is the true distance; `bounds` brackets it
- * using only the analytic geometry plus the most the noise terms could
- * possibly add, which is an order of magnitude cheaper. Most sample candidates
- * are decided by the bounds alone and never pay for noise.
- */
-interface Field {
-  exact(x: number, y: number, z: number): number;
-  /**
-   * The region's smooth surface, without fold or grain noise. Normals come
-   * from this: it is a handful of arithmetic operations where `exact` costs
-   * several noise evaluations, and the normal of the underlying form is what
-   * a normal is for.
-   */
-  smooth(x: number, y: number, z: number): number;
-  /** Writes [lower, upper] bounds on `exact` into `out`. */
-  bounds(x: number, y: number, z: number, out: Float64Array): void;
-}
 
 /** Cerebrum before folding: hemispheres, temporal lobes, flat base. */
 function cerebrumBase(x: number, y: number, z: number): number {
@@ -309,17 +229,7 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
   const rng = new Rng(seed * 2654435761);
   const cfg: FieldConfig = { foldDepth, foldScale };
 
-  const cerebrum = cerebrumField(noise, cfg);
-  const cerebellum = cerebellumField(noise);
-  const stem = stemField(noise);
-
-  // Region quotas, roughly proportional to real volume share.
-  const quota = [
-    Math.round(count * 0.845),
-    Math.round(count * 0.115),
-    0,
-  ];
-  quota[2] = Math.max(0, count - quota[0] - quota[1]);
+  const parts = brainParts(options.shape ?? 'classic', noise, cfg, options.grid);
 
   const positions = new Float32Array(count * 3);
   const normals = new Float32Array(count * 3);
@@ -341,7 +251,7 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     return other.exact(x, y, z) < -0.004;
   };
 
-  const sampleRegion = (field: Field, others: Field[], target: number, id: Region, shellDepth: number, box: Box) => {
+  const sampleRegion = ({ field, others, target, id, shellDepth, box, regionOf }: SampleTarget) => {
     const smooth: FieldFn = (x, y, z) => field.smooth(x, y, z);
     let placed = 0;
     // A generous iteration ceiling: sampling converges fast, but never let a
@@ -385,16 +295,20 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
       positions[o] = x; positions[o + 1] = y; positions[o + 2] = z;
       gradient(smooth, x, y, z, normals, o);
       depth[written] = t;
-      region[written] = id;
+      region[written] = regionOf ? regionOf(x, y, z) : id;
       maxRadius = Math.max(maxRadius, len3(x, y, z));
       written++;
       placed++;
     }
   };
 
-  sampleRegion(cerebrum, [cerebellum, stem], quota[0], REGION.CORTEX, shell, BOX);
-  sampleRegion(cerebellum, [], quota[1], REGION.CEREBELLUM, shell * 0.6, CEREBELLUM_BOX);
-  sampleRegion(stem, [], quota[2], REGION.STEM, shell * 0.75, STEM_BOX);
+  // Region quotas, roughly proportional to real volume share.
+  let assigned = 0;
+  parts.forEach((part, i) => {
+    const target = i === parts.length - 1 ? count - assigned : Math.round(count * part.share);
+    assigned += target;
+    sampleRegion({ ...part, target, shellDepth: shell * part.shellScale });
+  });
 
   return {
     positions: positions.subarray(0, written * 3),
@@ -404,4 +318,59 @@ export function sampleBrain(options: BrainSampleOptions): BrainCloud {
     count: written,
     bounds: maxRadius || 1,
   };
+}
+
+/* --------------------------------------------------------------- the shapes */
+
+/** One region to sample: its field, what it must not overlap, and its share. */
+interface Part {
+  field: Field;
+  /** Regions sampled before this one whose bodies it must stay out of. */
+  others: Field[];
+  /** Share of all nodes. */
+  share: number;
+  id: Region;
+  /** Shell depth relative to the cortex's. */
+  shellScale: number;
+  box: Box;
+  /** For a part spanning several regions: the region at a point. */
+  regionOf?: (x: number, y: number, z: number) => Region;
+}
+
+interface SampleTarget extends Part {
+  target: number;
+  shellDepth: number;
+}
+
+function brainParts(shape: BrainShape, noise: Noise3, cfg: FieldConfig, grid?: BrainGrid): Part[] {
+  if (shape === 'scan') {
+    if (!grid) throw new Error('the scan shape needs its grid loaded');
+    // One field for the whole brain, labelled by region per voxel. Sampled
+    // uniformly, regions get nodes in proportion to their real volume.
+    const distance = (x: number, y: number, z: number) => gridDistance(grid, x, y, z);
+    const field: Field = {
+      exact: distance,
+      smooth: distance,
+      bounds(x, y, z, out) {
+        out[0] = out[1] = distance(x, y, z);
+      },
+    };
+    return [{
+      field, others: [], share: 1, id: REGION.CORTEX, shellScale: 1, box: gridBox(grid),
+      regionOf: (x, y, z) => gridRegion(grid, x, y, z) as Region,
+    }];
+  }
+  const f = shape === 'anatomical' ? anatomicalFields(noise, cfg) : {
+    cerebrum: cerebrumField(noise, cfg),
+    cerebellum: cerebellumField(noise),
+    stem: stemField(noise),
+  };
+  const boxes = shape === 'anatomical'
+    ? ANATOMICAL_BOXES
+    : { cerebrum: BOX, cerebellum: CEREBELLUM_BOX, stem: STEM_BOX };
+  return [
+    { field: f.cerebrum, others: [f.cerebellum, f.stem], share: 0.845, id: REGION.CORTEX, shellScale: 1, box: boxes.cerebrum },
+    { field: f.cerebellum, others: [], share: 0.115, id: REGION.CEREBELLUM, shellScale: 0.6, box: boxes.cerebellum },
+    { field: f.stem, others: [], share: 0.04, id: REGION.STEM, shellScale: 0.75, box: boxes.stem },
+  ];
 }
