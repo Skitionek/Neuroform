@@ -6,6 +6,7 @@
  * one-line change at the call site in main.ts.
  */
 import { Rng } from '../core/rng';
+import { decodeTypedArray, isTypedArraySpec, type TypedArraySpec } from '../core/typed';
 import { sampleBrain, type BrainSampleOptions } from '../brain/shape';
 import { assembleGraph, wireNetwork, type Cloud, type WireOptions } from './build';
 import type { GraphSource, NetworkGraph } from './types';
@@ -30,17 +31,28 @@ export function proceduralBrain(options: ProceduralOptions): GraphSource {
  * origin; they are centred and normalised on load.
  */
 export interface GraphDataset {
-  /** Flat xyz triples, or an array of [x, y, z]. */
-  nodes: number[] | number[][];
-  /** Flat index pairs, or an array of [a, b]. */
-  edges: number[] | number[][];
+  /** Flat xyz triples, an array of [x, y, z], or a typed-array spec. */
+  nodes: NumericField;
+  /** Flat index pairs, an array of [a, b], or a typed-array spec. */
+  edges: NumericField;
   /** Optional cluster id per node, used for colour. */
-  regions?: number[];
+  regions?: number[] | TypedArraySpec;
   /** Optional 0 = surface, 1 = deep, per node. */
-  depth?: number[];
+  depth?: number[] | TypedArraySpec;
 }
 
-function flatten(values: number[] | number[][], stride: number): Float64Array {
+/**
+ * Any numeric field may be plain JSON numbers or, for large data, plotly's
+ * binary typed-array spec `{ dtype, bdata, shape }`.
+ */
+type NumericField = number[] | number[][] | TypedArraySpec;
+
+function flatten(values: NumericField, stride: number, label: string): ArrayLike<number> {
+  if (isTypedArraySpec(values)) {
+    const out = decodeTypedArray(values, label);
+    if (out.length % stride !== 0) throw new Error(`${label}: ${out.length} values is not a multiple of ${stride}`);
+    return out;
+  }
   if (values.length > 0 && Array.isArray(values[0])) {
     const rows = values as number[][];
     const out = new Float64Array(rows.length * stride);
@@ -53,7 +65,7 @@ function flatten(values: number[] | number[][], stride: number): Float64Array {
 }
 
 /** Centres on the centroid and scales so the cloud fits a unit-ish radius. */
-function normalise(raw: Float64Array, count: number): { positions: Float32Array; bounds: number } {
+function normalise(raw: ArrayLike<number>, count: number): { positions: Float32Array; bounds: number } {
   const centre = [0, 0, 0];
   for (let i = 0; i < count; i++) {
     for (let a = 0; a < 3; a++) centre[a] += raw[i * 3 + a];
@@ -81,7 +93,7 @@ function normalise(raw: Float64Array, count: number): { positions: Float32Array;
 }
 
 export function graphFromDataset(data: GraphDataset, seed = 11): NetworkGraph {
-  const rawNodes = flatten(data.nodes, 3);
+  const rawNodes = flatten(data.nodes, 3, 'nodes');
   const count = Math.floor(rawNodes.length / 3);
   if (count === 0) throw new Error('dataset has no nodes');
 
@@ -98,12 +110,18 @@ export function graphFromDataset(data: GraphDataset, seed = 11): NetworkGraph {
   }
 
   const depth = new Float32Array(count);
-  if (data.depth) for (let i = 0; i < count; i++) depth[i] = data.depth[i] ?? 0;
+  if (data.depth) {
+    const values = flatten(data.depth, 1, 'depth');
+    for (let i = 0; i < count; i++) depth[i] = values[i] ?? 0;
+  }
 
   const region = new Uint8Array(count);
-  if (data.regions) for (let i = 0; i < count; i++) region[i] = (data.regions[i] ?? 0) & 0xff;
+  if (data.regions) {
+    const values = flatten(data.regions, 1, 'regions');
+    for (let i = 0; i < count; i++) region[i] = (values[i] ?? 0) & 0xff;
+  }
 
-  const pairs = flatten(data.edges, 2);
+  const pairs = flatten(data.edges, 2, 'edges');
   const src: number[] = [];
   const dst: number[] = [];
   for (let e = 0; e < pairs.length / 2; e++) {
@@ -139,13 +157,9 @@ export function datasetGraph(url: string): GraphSource {
     id: `dataset:${url}`,
     label: url,
     async load(): Promise<NetworkGraph> {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`cannot load ${url}: ${response.status}`);
-      // A dev server answers an unknown path with index.html, so a typo in the
-      // filename otherwise surfaces as a baffling JSON parse error.
-      const type = response.headers.get('content-type') ?? '';
-      if (!type.includes('json')) throw new Error(`${url} is not JSON (got ${type.split(';')[0] || 'no content type'})`);
-      return graphFromDataset((await response.json()) as GraphDataset);
+      // Imported lazily: request.ts imports this module.
+      const { buildGraph } = await import('./request');
+      return buildGraph({ kind: 'dataset', url: new URL(url, globalThis.location?.href).href });
     },
   };
 }

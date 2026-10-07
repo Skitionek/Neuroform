@@ -1,10 +1,14 @@
 /**
  * Signals in flight.
  *
- * Only the synapses currently carrying a pulse are drawn here, as a second line
- * mesh rebuilt each frame from the simulation's live-pulse list. A comet of
- * light runs from the firing node towards its neighbour, so you can watch the
- * wave advance wire by wire rather than seeing nodes blink in sequence.
+ * One line per live pulse, carrying only which two nodes it runs between and
+ * when it started; endpoints are fetched from the
+ * node textures, and the comet's position along the wire is
+ * computed from the shader clock. A pulse's data is therefore written once,
+ * when it spawns, instead of being rebuilt every frame.
+ *
+ * A comet of light runs from the firing node toward its neighbour, so you can
+ * watch the wave advance wire by wire rather than seeing nodes blink in turn.
  */
 import {
   AdditiveBlending,
@@ -14,15 +18,18 @@ import {
   LineSegments,
   ShaderMaterial,
 } from 'three';
-import type { NetworkGraph } from '../graph/types';
-import type { PulseView } from '../sim/network';
+import type { NetworkSim } from '../sim/network';
+import { NODE_FETCH_GLSL, setPulledBounds, vertexCountCarrier, type NodeTextures } from './node-textures';
 import { PALETTE } from './palette';
 
 const vertexShader = /* glsl */ `
-  attribute float aT;
-  attribute float aHead;
-  attribute float aAmp;
-  attribute float aSpan;
+  ${NODE_FETCH_GLSL}
+  uniform float uTime;
+  uniform float uCometLength;
+
+  // Two vertices per pulse: even ids at the firing end, odd at the receiving.
+  attribute vec2 aEnds;    // from node, to node
+  attribute vec3 aTiming;  // start time, duration, amplitude
 
   varying float vT;
   varying float vHead;
@@ -30,11 +37,15 @@ const vertexShader = /* glsl */ `
   varying float vSpan;
 
   void main() {
-    vT = aT;
-    vHead = aHead;
-    vAmp = aAmp;
-    vSpan = aSpan;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec3 a = nodePosition(aEnds.x).xyz;
+    vec3 b = nodePosition(aEnds.y).xyz;
+    vT = float(gl_VertexID & 1);
+    vHead = clamp((uTime - aTiming.x) / aTiming.y, 0.0, 1.0);
+    vAmp = aTiming.z;
+    // Comet length in the edge's own 0..1 parameter space, so a long tract
+    // gets a long streak and a short synapse a compact spark.
+    vSpan = min(1.0, uCometLength / max(1e-4, length(b - a)));
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(mix(a, b, vT), 1.0);
   }
 `;
 
@@ -64,8 +75,6 @@ const fragmentShader = /* glsl */ `
 `;
 
 export interface PulseLayerOptions {
-  /** Most pulses drawn in one frame. */
-  capacity?: number;
   /** Comet length in model units. */
   cometLength?: number;
   intensity?: number;
@@ -75,46 +84,40 @@ export class PulseLayer {
   readonly lines: LineSegments;
   readonly material: ShaderMaterial;
 
-  private graph: NetworkGraph;
-  private capacity: number;
-  private cometLength: number;
+  private geometry: BufferGeometry;
+  private sim: NetworkSim;
+  // Per vertex (two per pulse slot): [from, to] and [start, duration, amp].
+  private ends: BufferAttribute;
+  private timing: BufferAttribute;
 
-  private position: BufferAttribute;
-  private head: BufferAttribute;
-  private amp: BufferAttribute;
-  private span: BufferAttribute;
+  constructor(sim: NetworkSim, nodes: NodeTextures, options: PulseLayerOptions = {}) {
+    const { cometLength = 0.055, intensity = 1.2 } = options;
+    this.sim = sim;
+    const capacity = sim.pulses.capacity;
 
-  constructor(graph: NetworkGraph, options: PulseLayerOptions = {}) {
-    const { capacity = 24000, cometLength = 0.055, intensity = 1.2 } = options;
-    this.graph = graph;
-    this.capacity = capacity;
-    this.cometLength = cometLength;
-
-    const verts = capacity * 2;
-    this.position = dynamic(new Float32Array(verts * 3), 3);
-    this.head = dynamic(new Float32Array(verts), 1);
-    this.amp = dynamic(new Float32Array(verts), 1);
-    this.span = dynamic(new Float32Array(verts), 1);
-
-    // Constant: 0 at the firing end, 1 at the receiving end.
-    const t = new Float32Array(verts);
-    for (let i = 0; i < capacity; i++) {
-      t[i * 2] = 0;
-      t[i * 2 + 1] = 1;
-    }
-
+    // Two plain vertices per pulse rather than an instanced two-vertex line:
+    // instancing meshes that small wastes most of each vertex batch. The
+    // pool keeps one entry per pulse; update() expands just the slots that
+    // changed into both of their vertices.
     const geometry = new BufferGeometry();
-    geometry.setAttribute('position', this.position);
-    geometry.setAttribute('aT', new BufferAttribute(t, 1));
-    geometry.setAttribute('aHead', this.head);
-    geometry.setAttribute('aAmp', this.amp);
-    geometry.setAttribute('aSpan', this.span);
+    geometry.setAttribute('position', vertexCountCarrier(capacity * 2));
+    this.ends = new BufferAttribute(new Float32Array(capacity * 2 * 2), 2);
+    this.timing = new BufferAttribute(new Float32Array(capacity * 2 * 3), 3);
+    this.ends.setUsage(DynamicDrawUsage);
+    this.timing.setUsage(DynamicDrawUsage);
+    geometry.setAttribute('aEnds', this.ends);
+    geometry.setAttribute('aTiming', this.timing);
     geometry.setDrawRange(0, 0);
+    setPulledBounds(geometry, sim.graph.bounds);
+    this.geometry = geometry;
 
     this.material = new ShaderMaterial({
       vertexShader,
       fragmentShader,
       uniforms: {
+        ...nodes.uniforms(),
+        uTime: { value: 0 },
+        uCometLength: { value: cometLength },
         uColor: { value: PALETTE.pulse.clone() },
         uIntensity: { value: intensity },
       },
@@ -127,48 +130,44 @@ export class PulseLayer {
     this.lines.frustumCulled = false;
   }
 
-  /** Rewrites the buffers from this frame's live pulses. */
-  update(pulses: PulseView): void {
-    const count = Math.min(pulses.count, this.capacity);
-    const pos = this.position.array as Float32Array;
-    const head = this.head.array as Float32Array;
-    const amp = this.amp.array as Float32Array;
-    const span = this.span.array as Float32Array;
-    const nodes = this.graph.positions;
+  update(): void {
+    const pool = this.sim.pulses;
+    const ends = this.ends.array as Float32Array;
+    const timing = this.timing.array as Float32Array;
 
-    for (let i = 0; i < count; i++) {
-      const from = pulses.from[i] * 3;
-      const to = pulses.to[i] * 3;
-      const o = i * 6;
+    // Copies pool slots [first, first + count) into both of their vertices.
+    const expand = (first: number, count: number) => {
+      for (let slot = first; slot < first + count; slot++) {
+        for (let v = 0; v < 2; v++) {
+          const vertex = slot * 2 + v;
+          ends[vertex * 2] = pool.ends[slot * 2];
+          ends[vertex * 2 + 1] = pool.ends[slot * 2 + 1];
+          timing[vertex * 3] = pool.timing[slot * 3];
+          timing[vertex * 3 + 1] = pool.timing[slot * 3 + 1];
+          timing[vertex * 3 + 2] = pool.timing[slot * 3 + 2];
+        }
+      }
+    };
 
-      pos[o] = nodes[from];
-      pos[o + 1] = nodes[from + 1];
-      pos[o + 2] = nodes[from + 2];
-      pos[o + 3] = nodes[to];
-      pos[o + 4] = nodes[to + 1];
-      pos[o + 5] = nodes[to + 2];
-
-      const h = pulses.progress[i];
-      const a = pulses.amplitude[i];
-      // Normalise comet length into the edge's own 0..1 parameter space so a
-      // long tract gets a long streak and a short synapse a compact spark.
-      const length = Math.max(1e-4, this.graph.edgeLength[pulses.edge[i]]);
-      const s = Math.min(1, this.cometLength / length);
-
-      head[i * 2] = h;
-      head[i * 2 + 1] = h;
-      amp[i * 2] = a;
-      amp[i * 2 + 1] = a;
-      span[i * 2] = s;
-      span[i * 2 + 1] = s;
+    const ranges: number[] = [];
+    const result = pool.dirty.drain((first, count) => {
+      expand(first, count);
+      ranges.push(first, count);
+    });
+    if (result === 'all') {
+      // No ranges recorded: three uploads the whole buffer.
+      expand(0, pool.count);
     }
-
-    const verts = count * 2;
-    markRange(this.position, verts * 3);
-    markRange(this.head, verts);
-    markRange(this.amp, verts);
-    markRange(this.span, verts);
-    this.lines.geometry.setDrawRange(0, verts);
+    if (result !== 'none') {
+      for (let r = 0; r < ranges.length; r += 2) {
+        this.ends.addUpdateRange(ranges[r] * 4, ranges[r + 1] * 4);
+        this.timing.addUpdateRange(ranges[r] * 6, ranges[r + 1] * 6);
+      }
+      this.ends.needsUpdate = true;
+      this.timing.needsUpdate = true;
+    }
+    this.geometry.setDrawRange(0, pool.count * 2);
+    this.material.uniforms.uTime.value = this.sim.now;
   }
 
   setIntensity(value: number): void {
@@ -176,34 +175,11 @@ export class PulseLayer {
   }
 
   setCometLength(value: number): void {
-    this.cometLength = value;
+    this.material.uniforms.uCometLength.value = value;
   }
 
   dispose(): void {
-    this.lines.geometry.dispose();
+    this.geometry.dispose();
     this.material.dispose();
   }
-}
-
-function dynamic(array: Float32Array, itemSize: number): BufferAttribute {
-  const attribute = new BufferAttribute(array, itemSize);
-  attribute.setUsage(DynamicDrawUsage);
-  return attribute;
-}
-
-/**
- * Uploads only the slice actually in use. Pulse counts swing wildly between
- * frames, and re-sending the whole capacity every frame is most of the
- * bandwidth this scene would otherwise spend.
- */
-function markRange(attribute: BufferAttribute, used: number): void {
-  const withRanges = attribute as BufferAttribute & {
-    addUpdateRange?: (start: number, count: number) => void;
-    clearUpdateRanges?: () => void;
-  };
-  if (used > 0 && typeof withRanges.addUpdateRange === 'function') {
-    withRanges.clearUpdateRanges?.();
-    withRanges.addUpdateRange(0, used);
-  }
-  attribute.needsUpdate = used > 0;
 }

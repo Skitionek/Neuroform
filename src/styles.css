@@ -52,6 +52,9 @@ html, body {
 }
 
 .readout {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   position: fixed;
   bottom: 0;
   left: 0;
@@ -62,6 +65,9 @@ html, body {
   pointer-events: none;
   font-variant-numeric: tabular-nums;
 }
+
+#gpu-text:empty { display: none; }
+#gpu-text { opacity: 0.8; }
 
 /* lil-gui, dressed down to match */
 .lil-gui {
@@ -77,6 +83,19 @@ html, body {
   --name-width: 52%;
   backdrop-filter: blur(14px);
   border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* What the option under the pointer does; pinned to the panel's bottom. */
+.panel-help {
+  position: sticky;
+  bottom: 0;
+  padding: 8px var(--padding, 4px);
+  min-height: 3.6em;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgba(205, 212, 245, 0.75);
+  background: rgba(10, 11, 22, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 @media (max-width: 640px) {

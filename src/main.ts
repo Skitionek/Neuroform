@@ -5,6 +5,7 @@
 import {
   Clock,
   Group,
+  Matrix4,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -13,15 +14,21 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
-import { datasetGraph, proceduralBrain } from './graph/sources';
-import type { GraphSource, NetworkGraph } from './graph/types';
+import { GraphBuilder, SupersededError, type GraphRequest } from './graph/request';
+import type { NetworkGraph } from './graph/types';
+import { pulseCapacity, scaleLook, scaleReach } from './core/scale';
 import { DEFAULT_PARAMS, NetworkSim } from './sim/network';
 import { EdgeLayer } from './render/edges';
+import { GpuTimer, type TimerMode } from './render/gpu-timer';
+import { NodeTextures } from './render/node-textures';
+import { ScenePass } from './render/scene-pass';
+import { MembraneLayer, MembranePass } from './render/membranes';
+import { layoutNeurons } from './graph/neurons';
 import { NodeLayer } from './render/nodes';
+import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { PALETTE } from './render/palette';
 import { createPanel, type PanelState } from './ui/panel';
@@ -33,11 +40,12 @@ const readout = document.querySelector<HTMLElement>('#readout-text')!;
 
 const state: PanelState = {
   structure: {
-    nodes: 26000,
+    nodes: 55000,
     seed: 7,
     foldDepth: 0.034,
     foldScale: 7.4,
     shell: 0.055,
+    fill: 1,
     minDegree: 2,
     maxDegree: 9,
     radius: 0.075,
@@ -61,6 +69,13 @@ const state: PanelState = {
     cometLength: 0.055,
     bloom: 0.45,
     autoRotate: true,
+    restFps: 20,
+    neurons: true,
+    // Small blobs on every node; the merge is depth-aware, so only nodes
+    // that are actually close fuse.
+    cellDensity: 1,
+    cellSize: 0.003,
+    cellZoom: 1,
   },
 };
 
@@ -105,6 +120,8 @@ renderer.setClearColor(PALETTE.background, 1);
 const scene = new Scene();
 const camera = new PerspectiveCamera(42, 1, 0.01, 50);
 camera.position.set(1.35, 0.42, 1.5);
+/** Opening camera distance: cell sizes are given as seen from here. */
+const HOME_DISTANCE = camera.position.length();
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -118,15 +135,42 @@ controls.autoRotateSpeed = 0.28;
 const world = new Group();
 scene.add(world);
 
+// `?gpu=1` times each render pass with GPU timer queries and shows the result
+// under the readout; `?gpu=finish` is a stalling fallback for GPUs and
+// browsers without the timer extension.
+const gpuParam = new URLSearchParams(window.location.search).get('gpu');
+const timerMode: TimerMode = gpuParam === 'finish' ? 'finish' : gpuParam ? 'query' : 'off';
+const gpuTimer = new GpuTimer(renderer.getContext() as WebGL2RenderingContext, timerMode);
+const gpuReadout = document.querySelector<HTMLElement>('#gpu-text')!;
+
 const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+const scenePass = new ScenePass(scene, camera, gpuTimer);
+composer.addPass(scenePass);
+// Neurons as merging, membraned cells, drawn over the scene before bloom.
+const membranePass = new MembranePass(camera, gpuTimer);
+// `?cellRes=1` pins the cells' density buffer to full resolution (or any
+// share of it); by default it drops as far as the cells' size allows.
+const cellRes = Number(new URLSearchParams(window.location.search).get('cellRes'));
+if (cellRes > 0) membranePass.setResolution(cellRes);
+composer.addPass(membranePass);
 // A high threshold keeps the bloom on firing nodes and pulses instead of
 // lifting the whole resting cloud into a haze.
 const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5);
 composer.addPass(bloom);
 // Without this the composer's linear buffer reaches the canvas unconverted and
 // the near-black background lifts to navy.
-composer.addPass(new OutputPass());
+const output = new OutputPass();
+composer.addPass(output);
+
+// Bloom and output are timed as wholes.
+for (const [label, pass] of [['bloom', bloom], ['output', output]] as const) {
+  const render = pass.render.bind(pass);
+  pass.render = (...args: Parameters<typeof render>) => {
+    gpuTimer.begin(label);
+    render(...args);
+    gpuTimer.end();
+  };
+}
 
 /* ------------------------------------------------------------------ network */
 
@@ -134,71 +178,96 @@ let graph: NetworkGraph;
 let sim: NetworkSim;
 let nodeLayer: NodeLayer;
 let edgeLayer: EdgeLayer;
+let nodeTextures: NodeTextures;
+let membraneLayer: MembraneLayer | null = null;
+/** The cell density the current membrane layer was laid out for. */
+let laidOutDensity = -1;
+let relayoutTimer = 0;
 let pulseLayer: PulseLayer;
-/** False while a rebuild is in flight, when the layers are disposed or absent. */
+let picker: NodePicker;
+/** False until the first network is in place. */
 let ready = false;
-/** Rebuilds are async; only the newest one is allowed to publish its result. */
-let buildToken = 0;
+/** Shown in the readout while a rebuild runs; the old network keeps animating. */
+let building = false;
 
-function currentSource(): GraphSource {
-  // `?dataset=/my-graph.json` loads a network from data instead of generating
+const builder = new GraphBuilder();
+
+function currentRequest(): GraphRequest {
+  // `?dataset=my-graph.json` loads a network from data instead of generating
   // one. Everything downstream reads the same NetworkGraph either way.
   const dataset = new URLSearchParams(window.location.search).get('dataset');
-  if (dataset) return datasetGraph(dataset);
+  if (dataset) return { kind: 'dataset', url: new URL(dataset, window.location.href).href };
 
-  return proceduralBrain({
-    count: state.structure.nodes,
-    seed: state.structure.seed,
-    shell: state.structure.shell,
-    foldDepth: state.structure.foldDepth,
-    foldScale: state.structure.foldScale,
-    minDegree: state.structure.minDegree,
-    maxDegree: state.structure.maxDegree,
-    radius: state.structure.radius,
-  });
+  return {
+    kind: 'procedural',
+    options: {
+      count: state.structure.nodes,
+      seed: state.structure.seed,
+      shell: state.structure.shell,
+      fill: state.structure.fill,
+      foldDepth: state.structure.foldDepth,
+      foldScale: state.structure.foldScale,
+      minDegree: state.structure.minDegree,
+      maxDegree: state.structure.maxDegree,
+      radius: scaleReach(state.structure.radius, state.structure.nodes),
+    },
+  };
 }
 
 function teardown(): void {
   if (!nodeLayer) return;
   world.remove(nodeLayer.points, edgeLayer.lines, pulseLayer.lines);
-  nodeLayer.dispose();
   edgeLayer.dispose();
+  nodeLayer.dispose();
   pulseLayer.dispose();
+  disposeMembranes();
+  nodeTextures.dispose();
 }
 
 async function build(): Promise<void> {
-  const token = ++buildToken;
-  ready = false;
-  readout.textContent = 'growing network…';
-  // Yield once so the message paints before the synchronous build blocks.
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  building = true;
+  if (!ready) readout.textContent = 'growing network…';
 
+  // The network is generated on a worker, so the current one keeps animating
+  // (and stays interactive) until its replacement is ready.
   let next: NetworkGraph;
   try {
-    next = await currentSource().load();
+    next = await builder.build(currentRequest());
   } catch (error) {
+    if (error instanceof SupersededError) return; // a newer build owns the readout
+    building = false;
     readout.textContent = `could not build network: ${(error as Error).message}`;
     return;
   }
-  // A newer rebuild started while this one was loading; drop this result.
-  if (token !== buildToken) return;
+  building = false;
 
+  // Swap synchronously, so no frame ever sees a half-built scene.
   teardown();
   graph = next;
-  sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal });
+  sim = new NetworkSim(graph, { ...DEFAULT_PARAMS, ...state.signal, maxPulses: pulseCapacity(graph.nodeCount) });
 
-  nodeLayer = new NodeLayer(graph, { size: state.look.pointSize });
-  edgeLayer = new EdgeLayer(graph, { opacity: state.look.edgeOpacity });
-  pulseLayer = new PulseLayer(graph, {
-    capacity: DEFAULT_PARAMS.maxPulses,
-    cometLength: state.look.cometLength,
-    intensity: state.look.pulseIntensity,
+  const look = scaleLook(state.look, graph.nodeCount);
+  nodeTextures = new NodeTextures(graph);
+  nodeLayer = new NodeLayer(graph, sim, { size: look.pointSize });
+  edgeLayer = new EdgeLayer(graph, nodeTextures, { opacity: look.edgeOpacity });
+  pulseLayer = new PulseLayer(sim, nodeTextures, {
+    cometLength: look.cometLength,
+    intensity: look.pulseIntensity,
   });
+  picker = new NodePicker(graph.positions, graph.nodeCount);
   world.add(edgeLayer.lines, pulseLayer.lines, nodeLayer.points);
+  layOutNeurons();
+  scenePass.layers = [
+    { label: 'synapses', object: edgeLayer.lines },
+    { label: 'points', object: nodeLayer.points },
+    { label: 'pulses', object: pulseLayer.lines },
+  ];
+  hovered = -1;
 
   applyLook();
   resize();
   ready = true;
+  wake();
 
   // Open with a few firings so the piece is never a dead object on load.
   for (let i = 0; i < 3; i++) {
@@ -206,24 +275,92 @@ async function build(): Promise<void> {
   }
 }
 
+/** (Re)builds the somas and neurites for the current network and density. */
+function layOutNeurons(): void {
+  disposeMembranes();
+  const layout = layoutNeurons(graph, { fraction: state.look.cellDensity });
+  membraneLayer = new MembraneLayer(sim, layout, nodeLayer.geometry, nodeTextures, {
+    cellSize: scaleLook(state.look, graph.nodeCount).cellSize,
+    cellZoom: state.look.cellZoom,
+    referenceDistance: HOME_DISTANCE,
+  });
+  membranePass.layer = membraneLayer;
+  laidOutDensity = state.look.cellDensity;
+}
+
+function disposeMembranes(): void {
+  membranePass.layer = null;
+  membraneLayer?.dispose();
+  membraneLayer = null;
+}
+
 function applySignal(): void {
   Object.assign(sim.params, state.signal);
+  wake();
 }
 
 function applyLook(): void {
   const { look } = state;
-  nodeLayer.material.uniforms.uSize.value = look.pointSize;
-  edgeLayer.setOpacity(look.edgeOpacity);
-  pulseLayer.setIntensity(look.pulseIntensity);
-  pulseLayer.setCometLength(look.cometLength);
+  const scaled = scaleLook(look, graph.nodeCount);
+  nodeLayer.material.uniforms.uSize.value = scaled.pointSize;
+  edgeLayer.setOpacity(scaled.edgeOpacity);
+  pulseLayer.setIntensity(scaled.pulseIntensity);
+  pulseLayer.setCometLength(scaled.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
+  membranePass.enabled = look.neurons;
+  // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
+  // every tick of a drag, so wait for it to settle.
+  if (look.cellDensity !== laidOutDensity) {
+    clearTimeout(relayoutTimer);
+    relayoutTimer = window.setTimeout(layOutNeurons, 150);
+  }
+  membraneLayer?.setCellSize(scaled.cellSize, look.cellZoom);
+  wake();
+}
+
+/* ---------------------------------------------------------- render pacing */
+
+/**
+ * Render on demand, the way plotly's 3D scenes skip redraws when nothing
+ * changed. While a wave runs or the user is handling the brain, every frame is
+ * drawn. At rest only slow things move (drift of a fraction of a pixel per
+ * second, a slow orbit, the shimmer), which look identical at `restFps`, so
+ * frames in between are skipped. Most of a frame's cost is the GPU (bloom
+ * especially), so skipped frames are where the power goes.
+ */
+let lastRender = 0;
+let activeUntil = 0;
+let interacting = false;
+
+/** Keeps the full frame rate for at least `ms` more milliseconds. */
+function wake(ms = 400): void {
+  activeUntil = Math.max(activeUntil, performance.now() + ms);
+}
+
+controls.addEventListener('start', () => {
+  interacting = true;
+  wake();
+});
+controls.addEventListener('end', () => {
+  interacting = false;
+  // Damping keeps the camera gliding for a while after release.
+  wake(1500);
+});
+
+function shouldRender(now: number): boolean {
+  // Below 10 fps a frame's step would exceed the sim's 0.1 s clamp and slow
+  // time down, so the slider's 1-9 behave as 10.
+  const restFps = state.look.restFps > 0 ? Math.max(10, state.look.restFps) : 0;
+  if (restFps <= 0 || interacting || now < activeUntil || sim.livePulses > 0) return true;
+  // A few ms of tolerance so rAF jitter doesn't skip a frame that is due.
+  return now - lastRender >= 1000 / restFps - 4;
 }
 
 /* -------------------------------------------------------------- interaction */
 
 const raycaster = new Raycaster();
-raycaster.params.Points.threshold = 0.012;
+const toLocal = new Matrix4();
 const pointer = new Vector2();
 let pointerInside = false;
 let pointerMoved = false;
@@ -242,14 +379,17 @@ function updatePointer(event: PointerEvent): void {
 
 function pick(): number {
   raycaster.setFromCamera(pointer, camera);
+  // The picker works in the cloud's own space.
+  toLocal.copy(nodeLayer.points.matrixWorld).invert();
+  raycaster.ray.applyMatrix4(toLocal);
   // Scale the pick radius with distance so far-away dots stay clickable.
-  raycaster.params.Points.threshold = 0.008 * camera.position.length();
-  const hits = raycaster.intersectObject(nodeLayer.points, false);
-  return hits.length > 0 && hits[0].index !== undefined ? hits[0].index : -1;
+  const threshold = Math.min(picker.maxThreshold, 0.008 * camera.position.length());
+  return picker.pick(raycaster.ray, threshold);
 }
 
 canvas.addEventListener('pointermove', (event) => {
   updatePointer(event);
+  wake(300); // hover feedback should track the pointer at full rate
   if (pressPosition.distanceTo(new Vector2(event.clientX, event.clientY)) > 6) {
     pointerMoved = true;
   }
@@ -277,6 +417,7 @@ canvas.addEventListener('pointerup', (event) => {
 
 window.addEventListener('keydown', (event) => {
   if (!ready) return;
+  wake();
   if (event.key === ' ') {
     event.preventDefault();
     sim.stimulate(Math.floor(Math.random() * graph.nodeCount), 1);
@@ -296,7 +437,9 @@ function resize(): void {
   renderer.setSize(width, height, false);
   composer.setPixelRatio(ratio);
   composer.setSize(width, height);
-  bloom.setSize(width * ratio, height * ratio);
+  // Bloom is a wide blur: from CSS pixels it looks the same as from device
+  // pixels on a high-density screen, at a quarter of the cost.
+  bloom.setSize(width, height);
 
   camera.aspect = width / Math.max(1, height);
   camera.updateProjectionMatrix();
@@ -313,8 +456,15 @@ let firingRate = 0;
 
 function frame(): void {
   requestAnimationFrame(frame);
+  if (!ready) {
+    clock.getDelta();
+    return;
+  }
+  const now = performance.now();
+  if (!shouldRender(now)) return;
+  lastRender = now;
+  // Time since the last drawn frame, whatever the pacing.
   const dt = clock.getDelta();
-  if (!ready) return;
 
   sim.step(dt);
 
@@ -323,10 +473,14 @@ function frame(): void {
     needsPick = false;
   }
 
-  nodeLayer.update(sim.activation, sim.now, pointerInside ? hovered : -1);
-  pulseLayer.update(sim.pulses);
+  nodeLayer.update(pointerInside ? hovered : -1);
+  pulseLayer.update();
+  gpuTimer.poll();
 
-  controls.update();
+  // Real elapsed time, so the orbit turns at the same speed at any frame rate
+  // (without it OrbitControls steps a fixed angle per call: three times slower
+  // at a 20 fps rest, twice as fast on a 120 Hz display).
+  controls.update(Math.min(dt, 0.1));
   if (window.neuroform.postprocessing) {
     composer.render();
   } else {
@@ -334,8 +488,10 @@ function frame(): void {
   }
 
   fps += ((dt > 0 ? 1 / dt : 60) - fps) * 0.08;
-  const now = performance.now();
   if (now - lastReadout > 180) {
+    if (timerMode !== 'off') gpuReadout.textContent = gpuTimer.summary();
+    // The counter restarts when the network is rebuilt or reset.
+    if (sim.stats.firings < firingsAt) firingsAt = 0;
     firingRate = ((sim.stats.firings - firingsAt) * 1000) / (now - lastReadout);
     firingsAt = sim.stats.firings;
     lastReadout = now;
@@ -345,7 +501,7 @@ function frame(): void {
       `${sim.livePulses.toLocaleString()} in flight`,
       `${firingRate.toFixed(0)} firings/s`,
       `${fps.toFixed(0)} fps`,
-      hovered >= 0 ? `node ${hovered}` : 'click a node · space fires one · r quiets',
+      building ? 'growing a new network…' : hovered >= 0 ? `node ${hovered}` : 'click a node · space fires one · r quiets',
     ].join('   ·   ');
   }
 }
@@ -361,9 +517,17 @@ declare global {
     neuroform: {
       stimulate(node?: number): void;
       reset(): void;
+      /** Changes look settings, e.g. `look({ bloom: 1, restFps: 30 })`. */
+      look(changes: Partial<PanelState['look']>): void;
+      /** Rebuilds the network, optionally changing structure settings first. */
+      rebuild(structure?: Partial<PanelState['structure']>): Promise<void>;
       get graph(): NetworkGraph;
       get sim(): NetworkSim;
-      layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer };
+      layers: { nodes: NodeLayer; edges: EdgeLayer; pulses: PulseLayer; membranes: MembraneLayer | null };
+      /** Smoothed GPU milliseconds per render section, when ?gpu is set. */
+      gpuTimings(): Record<string, number>;
+      /** Clears the GPU timings, e.g. after changing a setting. */
+      resetGpuTimings(): void;
       scene: Scene;
       camera: PerspectiveCamera;
       renderer: WebGLRenderer;
@@ -376,10 +540,23 @@ window.neuroform = {
   stimulate: (node) => {
     if (ready) sim.stimulate(node ?? Math.floor(Math.random() * graph.nodeCount), 1);
   },
-  reset: () => sim.reset(),
+  reset: () => {
+    sim.reset();
+    wake();
+  },
+  look: (changes) => {
+    Object.assign(state.look, changes);
+    applyLook();
+  },
+  rebuild: (structure) => {
+    Object.assign(state.structure, structure);
+    return build();
+  },
   get graph() { return graph; },
   get sim() { return sim; },
-  get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer }; },
+  get layers() { return { nodes: nodeLayer, edges: edgeLayer, pulses: pulseLayer, membranes: membraneLayer }; },
+  gpuTimings: () => Object.fromEntries(gpuTimer.ms),
+  resetGpuTimings: () => gpuTimer.reset(),
   scene,
   camera,
   renderer,
