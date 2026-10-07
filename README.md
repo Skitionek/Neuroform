@@ -185,6 +185,7 @@ The pulse pool grows with the network so big waves are not clipped.
 | `reliability` | how often a synapse actually transmits |
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
+| `depth`, `fov` | how much the far side darkens, waves included (`0` off); field of view, changed as a dolly zoom so the brain keeps its size |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
 | `neurons`, `cellDensity`, `cellSize`, `cellZoom` | cells on or off (`0`), share of nodes drawn as cells, blob radius, how far cells follow the zoom (`0` fixed in the brain, `1` fixed on screen) |
 | `cellRes` | pin the cells' buffer resolution (`1` full, `0.5` half); by default it fits the cell size |

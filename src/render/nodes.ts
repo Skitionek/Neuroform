@@ -19,6 +19,7 @@ import {
 import { uploadDirty } from '../core/dirty';
 import type { NetworkGraph } from '../graph/types';
 import { GLOW_FLOOR, type NetworkSim } from '../sim/network';
+import { DEPTH_CUE_GLSL, depthUniforms } from './depth';
 import { PALETTE, tissueColorFor } from './palette';
 
 const vertexShader = /* glsl */ `
@@ -34,6 +35,8 @@ const vertexShader = /* glsl */ `
   uniform float uBreath;
   uniform float uDim;
   uniform int uHover;
+
+  ${DEPTH_CUE_GLSL}
 
   varying vec3 vColor;
   varying float vGlow;
@@ -68,6 +71,8 @@ const vertexShader = /* glsl */ `
     // the very hottest go all the way to white, which keeps the crest of a
     // wave from flattening into one solid blob.
     vColor = mix(rest, mix(SIGNAL, SIGNAL_CORE, act * act * act), act);
+    // The far side recedes, firing or not.
+    vColor *= depthCue(mv.z);
     vGlow = act;
   }
 `;
@@ -88,6 +93,9 @@ const fragmentShader = /* glsl */ `
     gl_FragColor = vec4(vColor * (1.0 + 1.1 * vGlow), alpha);
   }
 `;
+
+/** Field of view, in degrees, that point sizes are tuned for. */
+const REFERENCE_FOV = 42;
 
 export interface NodeLayerOptions {
   size?: number;
@@ -146,6 +154,7 @@ export class NodeLayer {
         uBreath: { value: 1 },
         uDim: { value: 1 },
         uHover: { value: -1 },
+        ...depthUniforms,
       },
       transparent: true,
       depthWrite: false,
@@ -166,8 +175,14 @@ export class NodeLayer {
   }
 
   /** Keeps dots the same apparent size across resolutions and screen heights. */
-  setViewport(pixelRatio: number, heightPx: number): void {
-    this.material.uniforms.uViewportScale.value = pixelRatio * (heightPx / 800);
+  /**
+   * Point sizes are in pixels, which perspective division alone would keep
+   * at the same size whatever the field of view; scaling by the projection
+   * keeps dots in proportion to the brain when the fov changes.
+   */
+  setViewport(pixelRatio: number, heightPx: number, fov = REFERENCE_FOV): void {
+    const projection = Math.tan((REFERENCE_FOV * Math.PI) / 360) / Math.tan((fov * Math.PI) / 360);
+    this.material.uniforms.uViewportScale.value = pixelRatio * (heightPx / 800) * projection;
   }
 
   dispose(): void {

@@ -28,6 +28,7 @@ import { ScenePass } from './render/scene-pass';
 import { MembraneLayer, MembranePass } from './render/membranes';
 import { layoutNeurons } from './graph/neurons';
 import { NodeLayer } from './render/nodes';
+import { updateDepthCue } from './render/depth';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { PALETTE } from './render/palette';
@@ -76,6 +77,8 @@ const state: PanelState = {
     cellDensity: 1,
     cellSize: 0.003,
     cellZoom: 1,
+    depth: 0.7,
+    fov: 55,
   },
 };
 
@@ -118,10 +121,17 @@ const renderer = new WebGLRenderer({
 renderer.setClearColor(PALETTE.background, 1);
 
 const scene = new Scene();
+// Opens at 42° and the home position; a different fov is applied as a dolly
+// zoom from there (see setFov), so the framing stays the same.
 const camera = new PerspectiveCamera(42, 1, 0.01, 50);
 camera.position.set(1.35, 0.42, 1.5);
-/** Opening camera distance: cell sizes are given as seen from here. */
+/** Opening camera distance at 42°: cell sizes are given as seen from here. */
 const HOME_DISTANCE = camera.position.length();
+
+/** The opening distance at the current fov, after the dolly zoom. */
+function homeDistance(): number {
+  return (HOME_DISTANCE * Math.tan((42 * Math.PI) / 360)) / Math.tan((camera.fov * Math.PI) / 360);
+}
 
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -282,7 +292,7 @@ function layOutNeurons(): void {
   membraneLayer = new MembraneLayer(sim, layout, nodeLayer.geometry, nodeTextures, {
     cellSize: scaleLook(state.look, graph.nodeCount).cellSize,
     cellZoom: state.look.cellZoom,
-    referenceDistance: HOME_DISTANCE,
+    referenceDistance: homeDistance(),
   });
   membranePass.layer = membraneLayer;
   laidOutDensity = state.look.cellDensity;
@@ -308,6 +318,7 @@ function applyLook(): void {
   pulseLayer.setCometLength(scaled.cometLength);
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
+  setFov(look.fov);
   membranePass.enabled = look.neurons;
   // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
   // every tick of a drag, so wait for it to settle.
@@ -315,8 +326,21 @@ function applyLook(): void {
     clearTimeout(relayoutTimer);
     relayoutTimer = window.setTimeout(layOutNeurons, 150);
   }
-  membraneLayer?.setCellSize(scaled.cellSize, look.cellZoom);
+  membraneLayer?.setCellSize(scaled.cellSize, look.cellZoom, homeDistance());
   wake();
+}
+
+/**
+ * Changes the field of view as a dolly zoom: the camera moves so the brain
+ * keeps its size on screen, and only the strength of the perspective changes.
+ */
+function setFov(fov: number): void {
+  if (fov === camera.fov) return;
+  const scale = Math.tan((camera.fov * Math.PI) / 360) / Math.tan((fov * Math.PI) / 360);
+  camera.position.sub(controls.target).multiplyScalar(scale).add(controls.target);
+  camera.fov = fov;
+  camera.updateProjectionMatrix();
+  resize();
 }
 
 /* ---------------------------------------------------------- render pacing */
@@ -443,7 +467,7 @@ function resize(): void {
 
   camera.aspect = width / Math.max(1, height);
   camera.updateProjectionMatrix();
-  nodeLayer?.setViewport(ratio, height);
+  nodeLayer?.setViewport(ratio, height, camera.fov);
 }
 
 window.addEventListener('resize', resize);
@@ -481,6 +505,8 @@ function frame(): void {
   // (without it OrbitControls steps a fixed angle per call: three times slower
   // at a 20 fps rest, twice as fast on a 120 Hz display).
   controls.update(Math.min(dt, 0.1));
+  const sphere = nodeLayer.geometry.boundingSphere!;
+  updateDepthCue(camera, sphere.center, sphere.radius, state.look.depth);
   if (window.neuroform.postprocessing) {
     composer.render();
   } else {
