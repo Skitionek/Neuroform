@@ -5,7 +5,7 @@ and it fires: the signal runs down its connections at a finite speed, charges
 whatever it reaches, and whatever crosses threshold fires in turn. What you see
 is a wave of activation sweeping out through the tissue and fading.
 
-**Live:** https://skitionek.github.io/fun/
+**Live:** https://skitionek.github.io/Neuroform/
 
 ![Three waves of activation spreading through a 55,000-node brain](docs/screenshots/wave.jpg)
 
