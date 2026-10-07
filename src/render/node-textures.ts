@@ -4,7 +4,6 @@
  */
 import {
   BufferAttribute,
-  Color,
   DataTexture,
   FloatType,
   NearestFilter,
@@ -15,7 +14,7 @@ import {
   type PixelFormat,
 } from 'three';
 import type { NetworkGraph } from '../graph/types';
-import { tissueColorFor } from './palette';
+import { writeTissue } from './palette';
 
 /** GLSL for fetching node `index` from a texture laid out by NodeTextures. */
 export const NODE_FETCH_GLSL = /* glsl */ `
@@ -35,6 +34,8 @@ export class NodeTextures {
   readonly positions: DataTexture;
   readonly tissue: DataTexture;
   readonly width: number;
+  private regions: Uint8Array;
+  private tissueData: Float32Array<ArrayBuffer>;
 
   constructor(graph: NetworkGraph) {
     const n = graph.nodeCount;
@@ -42,19 +43,23 @@ export class NodeTextures {
     const height = Math.max(1, Math.ceil(n / this.width));
     const pos = new Float32Array(this.width * height * 4);
     const tissue = new Float32Array(this.width * height * 4);
-    const c = new Color();
     for (let i = 0; i < n; i++) {
       pos[i * 4] = graph.positions[i * 3];
       pos[i * 4 + 1] = graph.positions[i * 3 + 1];
       pos[i * 4 + 2] = graph.positions[i * 3 + 2];
       pos[i * 4 + 3] = graph.depth[i];
-      c.copy(tissueColorFor(graph.region[i]));
-      tissue[i * 4] = c.r;
-      tissue[i * 4 + 1] = c.g;
-      tissue[i * 4 + 2] = c.b;
     }
+    writeTissue(graph.region, tissue, 4);
+    this.regions = graph.region;
+    this.tissueData = tissue;
     this.positions = floatTexture(pos, this.width, height);
     this.tissue = floatTexture(tissue, this.width, height);
+  }
+
+  /** Picks up a new brain colour (see setBrainColor). */
+  refreshTissue(): void {
+    writeTissue(this.regions, this.tissueData, 4);
+    this.tissue.needsUpdate = true;
   }
 
   /** Uniforms matching NODE_FETCH_GLSL. */

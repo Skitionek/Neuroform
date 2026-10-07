@@ -20,7 +20,7 @@ import { uploadDirty } from '../core/dirty';
 import type { NetworkGraph } from '../graph/types';
 import { GLOW_FLOOR, type NetworkSim } from '../sim/network';
 import { DEPTH_CUE_GLSL, depthUniforms } from './depth';
-import { PALETTE, tissueColorFor } from './palette';
+import { PALETTE, writeTissue } from './palette';
 
 const vertexShader = /* glsl */ `
   attribute float aDepth;
@@ -106,6 +106,8 @@ export class NodeLayer {
   readonly geometry: BufferGeometry;
   readonly material: ShaderMaterial;
   private glow: BufferAttribute;
+  private tissue: BufferAttribute;
+  private regions: Uint8Array;
   private sim: NetworkSim;
 
   constructor(graph: NetworkGraph, sim: NetworkSim, options: NodeLayerOptions = {}) {
@@ -118,19 +120,17 @@ export class NodeLayer {
     geometry.setAttribute('aDepth', new BufferAttribute(graph.depth, 1));
 
     const seeds = new Float32Array(n);
-    const tissue = new Float32Array(n * 3);
-    const c = new Color();
     for (let i = 0; i < n; i++) {
       // Hashed from the index: stable per node, nothing extra to store upstream.
       const h = Math.sin(i * 12.9898) * 43758.5453;
       seeds[i] = h - Math.floor(h);
-      c.copy(tissueColorFor(graph.region[i]));
-      tissue[i * 3] = c.r;
-      tissue[i * 3 + 1] = c.g;
-      tissue[i * 3 + 2] = c.b;
     }
+    const tissue = new Float32Array(n * 3);
+    writeTissue(graph.region, tissue, 3);
+    this.regions = graph.region;
+    this.tissue = new BufferAttribute(tissue, 3);
     geometry.setAttribute('aSeed', new BufferAttribute(seeds, 1));
-    geometry.setAttribute('aTissue', new BufferAttribute(tissue, 3));
+    geometry.setAttribute('aTissue', this.tissue);
 
     // The simulation's own array: no per-frame copy.
     this.glow = new BufferAttribute(sim.glow, 2);
@@ -183,6 +183,12 @@ export class NodeLayer {
   setViewport(pixelRatio: number, heightPx: number, fov = REFERENCE_FOV): void {
     const projection = Math.tan((REFERENCE_FOV * Math.PI) / 360) / Math.tan((fov * Math.PI) / 360);
     this.material.uniforms.uViewportScale.value = pixelRatio * (heightPx / 800) * projection;
+  }
+
+  /** Picks up a new brain colour (see setBrainColor). */
+  refreshTissue(): void {
+    writeTissue(this.regions, this.tissue.array as Float32Array, 3);
+    this.tissue.needsUpdate = true;
   }
 
   dispose(): void {

@@ -187,7 +187,7 @@ The pulse pool grows with the network so big waves are not clipped.
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `depth`, `fov` | how much the far side darkens, waves included (`0` off); field of view, changed as a dolly zoom so the brain keeps its size |
-| `theme`, `background`, `transparent` | `dark` (light on a dark ground) or `light` (the same activity as ink on paper); the background colour, which each theme sets to its own when picked (`?background=ffffff`); `1` renders with an alpha channel and no background, for embedding over another page |
+| `theme`, `background`, `brainColor`, `transparent` | `dark` (light on a dark ground) or `light` (the same activity as ink on paper); the background and resting brain colours, which each theme sets to its own when picked (`?background=ffffff&brainColor=c0603a`; the cerebellum and stem keep their tints relative to the brain colour); `1` renders with an alpha channel and no background, for embedding over another page |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
 | `neurons`, `cellDensity`, `cellSize`, `cellZoom` | cells on or off (`0`), share of nodes drawn as cells, blob radius, how far cells follow the zoom (`0` fixed in the brain, `1` fixed on screen) |
 | `merge` | zoomed out, cells merge into one uniform brain shape and dots and synapses fade into it; zoomed in, it resolves into neurons (`0` off) |

@@ -29,7 +29,8 @@ import { MembraneLayer, MembranePass } from './render/membranes';
 import { layoutNeurons } from './graph/neurons';
 import { NodeLayer } from './render/nodes';
 import { updateDepthCue } from './render/depth';
-import { THEME_BACKGROUND, ThemePass } from './render/theme-pass';
+import { THEME_BACKGROUND, THEME_BRAIN, ThemePass } from './render/theme-pass';
+import { setBrainColor } from './render/palette';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { createPanel, type PanelState } from './ui/panel';
@@ -81,6 +82,7 @@ const state: PanelState = {
     depth: 0.7,
     theme: 'dark',
     background: THEME_BACKGROUND.dark,
+    brainColor: THEME_BRAIN.dark,
     transparent: false,
     merge: 1,
     fov: 55,
@@ -115,9 +117,9 @@ applyUrlOverrides();
 // A theme picked in the URL brings its own background unless one is given.
 {
   const params = new URLSearchParams(window.location.search);
-  if (params.has('theme') && !params.has('background')) {
-    state.look.background = THEME_BACKGROUND[state.look.theme === 'light' ? 'light' : 'dark'];
-  }
+  const theme = state.look.theme === 'light' ? 'light' : 'dark';
+  if (params.has('theme') && !params.has('background')) state.look.background = THEME_BACKGROUND[theme];
+  if (params.has('theme') && !params.has('brainColor')) state.look.brainColor = THEME_BRAIN[theme];
 }
 
 /* -------------------------------------------------------------- scene setup */
@@ -191,11 +193,19 @@ composer.addPass(themePass);
 const output = new OutputPass();
 composer.addPass(output);
 
-// Bloom and output are timed as wholes.
+// Bloom, theme and output are timed as wholes.
 for (const [label, pass] of [['bloom', bloom], ['output', output]] as const) {
   const render = pass.render.bind(pass);
   pass.render = (...args: Parameters<typeof render>) => {
     gpuTimer.begin(label);
+    render(...args);
+    gpuTimer.end();
+  };
+}
+{
+  const render = themePass.render.bind(themePass);
+  themePass.render = (...args: Parameters<typeof render>) => {
+    gpuTimer.begin('theme');
     render(...args);
     gpuTimer.end();
   };
@@ -330,10 +340,21 @@ function applySignal(): void {
   wake();
 }
 
+/** Brain colour the palette was last set to. */
+let brainColor = '';
+
 /** Background colour and page styling for the look's theme. */
 function applyTheme(look: typeof state.look): void {
   // Accept `?background=ffffff` as well as an encoded `%23ffffff`.
   if (/^[0-9a-f]{6}$/i.test(look.background)) look.background = `#${look.background}`;
+  if (/^[0-9a-f]{6}$/i.test(look.brainColor)) look.brainColor = `#${look.brainColor}`;
+  if (look.brainColor !== brainColor) {
+    brainColor = look.brainColor;
+    setBrainColor(brainColor);
+    // Layers built later read the palette directly; live ones need a nudge.
+    nodeLayer?.refreshTissue();
+    nodeTextures?.refreshTissue();
+  }
   if (look.theme !== 'light') look.theme = 'dark';
   themePass.set(look.theme, look.background, look.transparent);
   const root = document.documentElement;

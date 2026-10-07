@@ -4,7 +4,7 @@
  */
 import GUI from 'lil-gui';
 import { BRAIN_SHAPES, type BrainShape } from '../brain/shape';
-import { THEME_BACKGROUND, type Theme } from '../render/theme-pass';
+import { THEME_BACKGROUND, THEME_BRAIN, type Theme } from '../render/theme-pass';
 
 export interface StructureSettings {
   nodes: number;
@@ -59,6 +59,8 @@ export interface LookSettings {
   theme: Theme;
   /** CSS colour behind the brain. */
   background: string;
+  /** Resting colour of the cortex; the cerebellum and stem follow it. */
+  brainColor: string;
   /** Render with an alpha channel and no background, to sit over a page. */
   transparent: boolean;
 }
@@ -107,8 +109,9 @@ const HELP: Record<string, string> = {
   pulseIntensity: 'Brightness of signals travelling along synapses.',
   cometLength: 'Length of the bright tail behind each travelling signal.',
   bloom: 'Strength of the soft glow around bright things.',
-  theme: 'dark: light on a dark ground. light: the same activity as ink on paper. Switching resets the background to the theme\'s own.',
+  theme: 'dark: light on a dark ground. light: the same activity as ink on paper. Switching resets the background and brain colour to the theme\'s own.',
   background: 'Colour behind the brain.',
+  brainColor: 'Resting colour of the brain. The cerebellum and stem keep their tints relative to it; firing stays the signal colour.',
   transparent: 'Render with an alpha channel and no background, so the brain sits over whatever page it is embedded in.',
   depth: 'How much the far side of the brain darkens, so the near side reads in front. Applies to waves too: activation at the back glows dimmer.',
   fov: 'Field of view in degrees. Wider exaggerates perspective; the camera moves so the brain keeps its size on screen.',
@@ -173,10 +176,13 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'cometLength', 0.01, 0.3, 0.005).name('comet length');
   const theme = look.add(l, 'theme', ['dark', 'light']);
   const background = look.addColor(l, 'background');
+  const brain = look.addColor(l, 'brainColor').name('brain colour');
   theme.onChange((value: Theme) => {
-    // Each theme brings its own ground; pick another colour after if wanted.
+    // Each theme brings its own colours; pick others after if wanted.
     l.background = THEME_BACKGROUND[value];
+    l.brainColor = THEME_BRAIN[value];
     background.updateDisplay();
+    brain.updateDisplay();
   });
   look.add(l, 'transparent');
   look.add(l, 'bloom', 0, 2, 0.02);
