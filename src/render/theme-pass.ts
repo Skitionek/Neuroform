@@ -12,6 +12,10 @@
  *   nodes turning to a deep signal blue rather than to grey;
  * - transparent: the same, written with an alpha channel and no background,
  *   so the piece can sit over any page.
+ *
+ * It is also the last pass and encodes to sRGB itself, standing in for
+ * three's OutputPass (no tone mapping is used): one full-screen pass instead
+ * of two, so the theming costs next to nothing.
  */
 import { Color, NoBlending, ShaderMaterial, type WebGLRenderer, type WebGLRenderTarget } from 'three';
 import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
@@ -43,18 +47,24 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uDeepInk;     // what white-hot light becomes on paper
   varying vec2 vUv;
 
+  vec3 toSRGB(vec3 c) {
+    return mix(pow(c, vec3(0.41666)) * 1.055 - vec3(0.055), c * 12.92, vec3(lessThanEqual(c, vec3(0.0031308))));
+  }
+
+  vec4 compose(vec3 e);
+
   void main() {
-    vec3 e = texture2D(tDiffuse, vUv).rgb;
+    vec4 c = compose(texture2D(tDiffuse, vUv).rgb);
+    gl_FragColor = vec4(toSRGB(c.rgb), c.a);
+  }
+
+  vec4 compose(vec3 e) {
     float peak = max(e.r, max(e.g, e.b));
 
     if (!uLight) {
-      if (uTransparent) {
-        // Premultiplied: the light itself, covering as much as it is bright.
-        gl_FragColor = vec4(e, clamp(peak, 0.0, 1.0));
-      } else {
-        gl_FragColor = vec4(uBackground + e, 1.0);
-      }
-      return;
+      // Transparent: premultiplied, the light itself, covering as much as
+      // it is bright.
+      return uTransparent ? vec4(e, clamp(peak, 0.0, 1.0)) : vec4(uBackground + e, 1.0);
     }
 
     float lum = dot(e, vec3(0.2126, 0.7152, 0.0722));
@@ -66,11 +76,7 @@ const fragmentShader = /* glsl */ `
     float white = min(e.r, min(e.g, e.b)) / max(peak, 1e-4);
     // Denser ink is darker; white-hot light becomes the deep signal ink.
     vec3 ink = mix(hue * mix(0.8, 0.35, cover), uDeepInk, white * white * smoothstep(0.3, 0.9, cover));
-    if (uTransparent) {
-      gl_FragColor = vec4(ink * cover, cover);
-    } else {
-      gl_FragColor = vec4(mix(uBackground, ink, cover), 1.0);
-    }
+    return uTransparent ? vec4(ink * cover, cover) : vec4(mix(uBackground, ink, cover), 1.0);
   }
 `;
 

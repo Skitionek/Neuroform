@@ -15,7 +15,6 @@ import {
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { GraphBuilder, SupersededError, type GraphRequest } from './graph/request';
 import type { NetworkGraph } from './graph/types';
@@ -186,18 +185,18 @@ composer.addPass(membranePass);
 // lifting the whole resting cloud into a haze.
 const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5);
 composer.addPass(bloom);
-// Without this the composer's linear buffer reaches the canvas unconverted and
-// the near-black background lifts to navy.
+// Last: composites onto the background and encodes to sRGB, in place of
+// three's OutputPass (see theme-pass.ts). Without the encoding the linear
+// buffer reaches the canvas unconverted and the near-black background lifts
+// to navy.
 const themePass = new ThemePass();
 composer.addPass(themePass);
-const output = new OutputPass();
-composer.addPass(output);
 
-// Bloom, theme and output are timed as wholes.
-for (const [label, pass] of [['bloom', bloom], ['output', output]] as const) {
-  const render = pass.render.bind(pass);
-  pass.render = (...args: Parameters<typeof render>) => {
-    gpuTimer.begin(label);
+// Bloom and the theme (output) pass are timed as wholes.
+{
+  const render = bloom.render.bind(bloom);
+  bloom.render = (...args: Parameters<typeof render>) => {
+    gpuTimer.begin('bloom');
     render(...args);
     gpuTimer.end();
   };
