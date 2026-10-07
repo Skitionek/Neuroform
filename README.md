@@ -178,7 +178,7 @@ The pulse pool grows with the network so big waves are not clipped.
 |---|---|
 | `nodes`, `seed` | how many points, and which brain |
 | `shape` | `classic` (egg with noise folds), `anatomical` (lobes, fissures, named sulci) or `scan` (a real brain, from the MNI ICBM152 template) |
-| `foldDepth`, `foldScale`, `shell` | how deep and how fine the gyri, how thick the surface layer |
+| `foldDepth`, `foldScale`, `shell` | how deep and how fine the gyri (procedural shapes only), how thick the surface layer |
 | `fill` | `1` fills the volume evenly, `0` crowds nodes into the surface layer |
 | `minDegree`, `maxDegree`, `radius` | synapses per node and how far they reach |
 | `speed`, `range` | how fast signal travels and how far it gets before fading |

@@ -1,11 +1,5 @@
 # TODO
 
-## Show the folds
-`scan` is the default shape now, but its gyri do not read at 55k nodes with
-cells on, even with `fill 0`: the surface looks speckled. Showing them needs
-rendering work, such as shading by depth below the surface or by curvature,
-or fewer and larger surface cells.
-
 ## Dark and light themes
 Background colour becomes a setting, or the scene renders with an alpha
 channel so it can sit on any page. A light theme needs more than a new

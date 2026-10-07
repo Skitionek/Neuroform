@@ -79,8 +79,8 @@ const HELP: Record<string, string> = {
   nodes: 'How many neurons make up the brain. More is finer and slower; the other settings are normalised, so behaviour and brightness stay the same.',
   shape: 'classic: the original egg with noise folds. anatomical: built from lobes, fissures and named sulci. scan: a real brain, from the MNI ICBM152 template (77 kB, loaded when picked).',
   seed: 'Which brain: the same seed always grows the same shape and wiring.',
-  foldDepth: 'How deep the folds (gyri) cut into the surface. 0 is a smooth brain.',
-  foldScale: 'How fine the folds are: higher means more, narrower ridges.',
+  foldDepth: 'How deep the folds (gyri) cut into the surface. 0 is a smooth brain. Procedural shapes only.',
+  foldScale: 'How fine the folds are: higher means more, narrower ridges. Procedural shapes only.',
   shell: 'Thickness of the surface layer, which is drawn brightest and, with low fill, holds most nodes.',
   fill: '1 spreads nodes evenly through the whole volume; 0 crowds them into the surface layer.',
   minDegree: 'Fewest synapses a neuron makes to its neighbours.',
@@ -121,10 +121,17 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   const structure = gui.addFolder('structure');
   const s = state.structure;
   structure.add(s, 'nodes', 2000, 200000, 1000);
-  structure.add(s, 'shape', BRAIN_SHAPES);
+  const shape = structure.add(s, 'shape', BRAIN_SHAPES);
   structure.add(s, 'seed', 1, 999, 1);
-  structure.add(s, 'foldDepth', 0, 0.08, 0.001).name('fold depth');
-  structure.add(s, 'foldScale', 2, 16, 0.1).name('fold scale');
+  const folds = [
+    structure.add(s, 'foldDepth', 0, 0.08, 0.001).name('fold depth'),
+    structure.add(s, 'foldScale', 2, 16, 0.1).name('fold scale'),
+  ];
+  // The scan follows the template as it is: the folding settings only shape
+  // the procedural brains.
+  const syncFolds = () => folds.forEach((c) => c.enable(s.shape !== 'scan'));
+  shape.onChange(syncFolds);
+  syncFolds();
   structure.add(s, 'shell', 0.02, 0.14, 0.002).name('shell');
   structure.add(s, 'fill', 0, 1, 0.05).name('fill volume');
   structure.add(s, 'minDegree', 1, 8, 1).name('min synapses');
