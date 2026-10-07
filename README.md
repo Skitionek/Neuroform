@@ -7,16 +7,12 @@ is a wave of activation sweeping out through the tissue and fading.
 
 **Live:** https://skitionek.github.io/Neuroform/
 
-![Three waves of activation spreading through a 55,000-node brain](docs/screenshots/wave.jpg)
+![Three bursts of activation spreading through a 55,000-node brain](docs/screenshots/wave.jpg)
 
 <p>
+  <img src="docs/screenshots/side.jpg" width="49%" alt="Profile view: bursts in the cerebrum and the cerebellum" />
   <img src="docs/screenshots/cells.jpg" width="49%" alt="Close-up: neurons drawn as merging cells joined by neurites, with a burst firing" />
-  <img src="docs/screenshots/panel.jpg" width="49%" alt="The settings panel, with a help line explaining the option under the pointer" />
 </p>
-
-*Three bursts spreading through the default 55,000-node brain; a close-up of
-the cells and neurites; the settings panel, which explains each option under
-the pointer.*
 
 ```
 npm install
