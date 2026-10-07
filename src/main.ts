@@ -42,6 +42,7 @@ const readout = document.querySelector<HTMLElement>('#readout-text')!;
 const state: PanelState = {
   structure: {
     nodes: 55000,
+    shape: 'classic',
     seed: 7,
     foldDepth: 0.034,
     foldScale: 7.4,
@@ -95,7 +96,9 @@ function applyUrlOverrides(): void {
     for (const key of Object.keys(group)) {
       const raw = params.get(key);
       if (raw === null) continue;
-      if (typeof group[key] === 'boolean') {
+      if (typeof group[key] === 'string') {
+        group[key] = raw;
+      } else if (typeof group[key] === 'boolean') {
         group[key] = raw !== '0' && raw !== 'false';
       } else {
         const value = Number(raw);
@@ -211,7 +214,9 @@ function currentRequest(): GraphRequest {
 
   return {
     kind: 'procedural',
+    scanUrl: new URL('brain-mni152.sdf.gz', document.baseURI).href,
     options: {
+      shape: state.structure.shape,
       count: state.structure.nodes,
       seed: state.structure.seed,
       shell: state.structure.shell,

@@ -3,9 +3,11 @@
  * live, so the signal can be tuned while a wave is still running.
  */
 import GUI from 'lil-gui';
+import { BRAIN_SHAPES, type BrainShape } from '../brain/shape';
 
 export interface StructureSettings {
   nodes: number;
+  shape: BrainShape;
   seed: number;
   foldDepth: number;
   foldScale: number;
@@ -75,6 +77,7 @@ export interface PanelState {
  */
 const HELP: Record<string, string> = {
   nodes: 'How many neurons make up the brain. More is finer and slower; the other settings are normalised, so behaviour and brightness stay the same.',
+  shape: 'classic: the original egg with noise folds. anatomical: built from lobes, fissures and named sulci. scan: a real brain, from the MNI ICBM152 template (650 kB, loaded when picked).',
   seed: 'Which brain: the same seed always grows the same shape and wiring.',
   foldDepth: 'How deep the folds (gyri) cut into the surface. 0 is a smooth brain.',
   foldScale: 'How fine the folds are: higher means more, narrower ridges.',
@@ -118,6 +121,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   const structure = gui.addFolder('structure');
   const s = state.structure;
   structure.add(s, 'nodes', 2000, 200000, 1000);
+  structure.add(s, 'shape', BRAIN_SHAPES);
   structure.add(s, 'seed', 1, 999, 1);
   structure.add(s, 'foldDepth', 0, 0.08, 0.001).name('fold depth');
   structure.add(s, 'foldScale', 2, 16, 0.1).name('fold scale');

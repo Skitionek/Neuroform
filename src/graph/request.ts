@@ -4,15 +4,24 @@
  */
 import { graphFromDataset, proceduralBrain, type GraphDataset, type ProceduralOptions } from './sources';
 import type { NetworkGraph } from './types';
+import { loadBrainGrid } from '../brain/scan';
 
 export type GraphRequest =
-  | { kind: 'procedural'; options: ProceduralOptions }
+  /** `scanUrl` (absolute) is where the scan shape's grid lives. */
+  | { kind: 'procedural'; options: ProceduralOptions; scanUrl?: string }
   /** `url` must be absolute: a worker resolves relative URLs against itself. */
   | { kind: 'dataset'; url: string };
 
 /** Runs a request to completion on whatever thread calls it. */
 export async function buildGraph(request: GraphRequest): Promise<NetworkGraph> {
-  if (request.kind === 'procedural') return proceduralBrain(request.options).load();
+  if (request.kind === 'procedural') {
+    let grid;
+    if (request.options.shape === 'scan') {
+      if (!request.scanUrl) throw new Error('the scan shape needs scanUrl');
+      grid = await loadBrainGrid(request.scanUrl);
+    }
+    return proceduralBrain({ ...request.options, grid }).load();
+  }
 
   const response = await fetch(request.url);
   if (!response.ok) throw new Error(`cannot load ${request.url}: ${response.status}`);
