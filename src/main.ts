@@ -42,7 +42,7 @@ const readout = document.querySelector<HTMLElement>('#readout-text')!;
 const state: PanelState = {
   structure: {
     nodes: 55000,
-    shape: 'classic',
+    shape: 'scan',
     seed: 7,
     foldDepth: 0.034,
     foldScale: 7.4,

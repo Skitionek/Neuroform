@@ -77,7 +77,7 @@ export interface PanelState {
  */
 const HELP: Record<string, string> = {
   nodes: 'How many neurons make up the brain. More is finer and slower; the other settings are normalised, so behaviour and brightness stay the same.',
-  shape: 'classic: the original egg with noise folds. anatomical: built from lobes, fissures and named sulci. scan: a real brain, from the MNI ICBM152 template (650 kB, loaded when picked).',
+  shape: 'classic: the original egg with noise folds. anatomical: built from lobes, fissures and named sulci. scan: a real brain, from the MNI ICBM152 template (77 kB, loaded when picked).',
   seed: 'Which brain: the same seed always grows the same shape and wiring.',
   foldDepth: 'How deep the folds (gyri) cut into the surface. 0 is a smooth brain.',
   foldScale: 'How fine the folds are: higher means more, narrower ridges.',
