@@ -29,9 +29,9 @@ import { MembraneLayer, MembranePass } from './render/membranes';
 import { layoutNeurons } from './graph/neurons';
 import { NodeLayer } from './render/nodes';
 import { updateDepthCue } from './render/depth';
+import { THEME_BACKGROUND, ThemePass } from './render/theme-pass';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
-import { PALETTE } from './render/palette';
 import { createPanel, type PanelState } from './ui/panel';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!;
@@ -79,6 +79,9 @@ const state: PanelState = {
     cellSize: 0.003,
     cellZoom: 1,
     depth: 0.7,
+    theme: 'dark',
+    background: THEME_BACKGROUND.dark,
+    transparent: false,
     merge: 1,
     fov: 55,
   },
@@ -109,6 +112,13 @@ function applyUrlOverrides(): void {
 }
 
 applyUrlOverrides();
+// A theme picked in the URL brings its own background unless one is given.
+{
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('theme') && !params.has('background')) {
+    state.look.background = THEME_BACKGROUND[state.look.theme === 'light' ? 'light' : 'dark'];
+  }
+}
 
 /* -------------------------------------------------------------- scene setup */
 
@@ -121,8 +131,11 @@ const renderer = new WebGLRenderer({
   antialias: false,
   powerPreference: 'high-performance',
   preserveDrawingBuffer: captureMode,
+  // The theme pass writes real alpha, so `transparent` can show the page.
+  alpha: true,
 });
-renderer.setClearColor(PALETTE.background, 1);
+// Everything draws light on black; ThemePass puts it on the background.
+renderer.setClearColor(0x000000, 0);
 
 const scene = new Scene();
 // Opens at 42° and the home position; a different fov is applied as a dolly
@@ -173,6 +186,8 @@ const bloom = new UnrealBloomPass(new Vector2(1, 1), state.look.bloom, 0.5, 0.5)
 composer.addPass(bloom);
 // Without this the composer's linear buffer reaches the canvas unconverted and
 // the near-black background lifts to navy.
+const themePass = new ThemePass();
+composer.addPass(themePass);
 const output = new OutputPass();
 composer.addPass(output);
 
@@ -315,6 +330,18 @@ function applySignal(): void {
   wake();
 }
 
+/** Background colour and page styling for the look's theme. */
+function applyTheme(look: typeof state.look): void {
+  // Accept `?background=ffffff` as well as an encoded `%23ffffff`.
+  if (/^[0-9a-f]{6}$/i.test(look.background)) look.background = `#${look.background}`;
+  if (look.theme !== 'light') look.theme = 'dark';
+  themePass.set(look.theme, look.background, look.transparent);
+  const root = document.documentElement;
+  root.dataset.theme = look.theme;
+  root.style.setProperty('--void', look.transparent ? 'transparent' : look.background);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', look.background);
+}
+
 /** Synapse opacity from the look, before zoom merging fades it. */
 let edgeOpacity = 0;
 
@@ -344,6 +371,7 @@ function applyLook(): void {
   bloom.strength = look.bloom;
   controls.autoRotate = look.autoRotate;
   setFov(look.fov);
+  applyTheme(look);
   membranePass.enabled = look.neurons;
   // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
   // every tick of a drag, so wait for it to settle.

@@ -4,6 +4,7 @@
  */
 import GUI from 'lil-gui';
 import { BRAIN_SHAPES, type BrainShape } from '../brain/shape';
+import { THEME_BACKGROUND, type Theme } from '../render/theme-pass';
 
 export interface StructureSettings {
   nodes: number;
@@ -55,6 +56,11 @@ export interface LookSettings {
   depth: number;
   /** Vertical field of view in degrees; changed as a dolly zoom. */
   fov: number;
+  theme: Theme;
+  /** CSS colour behind the brain. */
+  background: string;
+  /** Render with an alpha channel and no background, to sit over a page. */
+  transparent: boolean;
 }
 
 export interface PanelHandlers {
@@ -101,6 +107,9 @@ const HELP: Record<string, string> = {
   pulseIntensity: 'Brightness of signals travelling along synapses.',
   cometLength: 'Length of the bright tail behind each travelling signal.',
   bloom: 'Strength of the soft glow around bright things.',
+  theme: 'dark: light on a dark ground. light: the same activity as ink on paper. Switching resets the background to the theme\'s own.',
+  background: 'Colour behind the brain.',
+  transparent: 'Render with an alpha channel and no background, so the brain sits over whatever page it is embedded in.',
   depth: 'How much the far side of the brain darkens, so the near side reads in front. Applies to waves too: activation at the back glows dimmer.',
   fov: 'Field of view in degrees. Wider exaggerates perspective; the camera moves so the brain keeps its size on screen.',
   autoRotate: 'Slowly turn the brain when you are not touching it.',
@@ -162,6 +171,14 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   look.add(l, 'edgeOpacity', 0, 0.3, 0.002).name('synapse veil');
   look.add(l, 'pulseIntensity', 0, 4, 0.05).name('pulse glow');
   look.add(l, 'cometLength', 0.01, 0.3, 0.005).name('comet length');
+  const theme = look.add(l, 'theme', ['dark', 'light']);
+  const background = look.addColor(l, 'background');
+  theme.onChange((value: Theme) => {
+    // Each theme brings its own ground; pick another colour after if wanted.
+    l.background = THEME_BACKGROUND[value];
+    background.updateDisplay();
+  });
+  look.add(l, 'transparent');
   look.add(l, 'bloom', 0, 2, 0.02);
   look.add(l, 'depth', 0, 1, 0.01).name('depth fade');
   look.add(l, 'fov', 15, 90, 1).name('perspective (fov)');
