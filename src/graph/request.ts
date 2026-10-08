@@ -5,6 +5,7 @@
 import { graphFromDataset, proceduralBrain, type GraphDataset, type ProceduralOptions } from './sources';
 import type { NetworkGraph } from './types';
 import { loadBrainGrid } from '../brain/scan';
+import { createGraphWorker } from './worker-factory';
 
 export type GraphRequest =
   /** `scanUrl` (absolute) is where the scan shape's grid lives. */
@@ -101,11 +102,19 @@ export class GraphBuilder {
     });
   }
 
+  /** Stops the worker and abandons any build in progress. */
+  dispose(): void {
+    this.worker?.terminate();
+    this.worker = null;
+    this.pending?.reject(new SupersededError());
+    this.pending = null;
+  }
+
   private ensureWorker(): Worker | null {
     if (this.worker) return this.worker;
     if (this.workersBroken || typeof Worker === 'undefined') return null;
     try {
-      this.worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+      this.worker = createGraphWorker();
     } catch {
       return null;
     }

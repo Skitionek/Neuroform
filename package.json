@@ -1,21 +1,77 @@
 {
   "name": "neuroform",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Brain-shaped point cloud whose synapses carry waves of activation.",
+  "license": "MIT",
+  "author": "Skitionek <skitionek@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Skitionek/Neuroform.git"
+  },
+  "homepage": "https://skitionek.github.io/Neuroform/",
+  "keywords": [
+    "web-component",
+    "custom-element",
+    "three",
+    "webgl",
+    "brain",
+    "neural-network",
+    "visualization",
+    "generative-art"
+  ],
+  "main": "./dist-lib/neuroform.js",
+  "module": "./dist-lib/neuroform.js",
+  "types": "./dist-lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/types/index.d.ts",
+      "import": "./dist-lib/neuroform.js"
+    },
+    "./standalone": {
+      "types": "./dist-lib/types/index.d.ts",
+      "import": "./dist-lib/neuroform.standalone.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "neuroform-snapshot": "./bin/neuroform-snapshot.mjs"
+  },
+  "files": [
+    "dist-lib",
+    "bin",
+    "src/assets/brain-mni152.LICENSE.txt",
+    "LICENSE",
+    "README.md"
+  ],
+  "sideEffects": [
+    "./dist-lib/neuroform.js",
+    "./dist-lib/neuroform.standalone.js"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:lib": "vite build -c vite.lib.config.ts && vite build -c vite.lib.config.ts --mode standalone && tsc -p tsconfig.lib.json",
+    "prepare": "npm run build:lib",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "snapshot": "node bin/neuroform-snapshot.mjs"
   },
   "dependencies": {
+    "@types/three": "^0.169.0",
     "lil-gui": "^0.19.2",
     "three": "^0.169.0"
   },
+  "peerDependencies": {
+    "playwright": ">=1.40"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@types/three": "^0.169.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }

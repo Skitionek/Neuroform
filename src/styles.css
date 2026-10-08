@@ -3,13 +3,6 @@
   --ink-dim: #7b86b4;
   /* Set from the background setting at runtime. */
   --void: #04040a;
-  --panel: rgba(10, 11, 22, 0.72);
-  --panel-edge: rgba(255, 255, 255, 0.06);
-  --widget: rgba(255, 255, 255, 0.08);
-  --widget-hover: rgba(255, 255, 255, 0.12);
-  --widget-focus: rgba(255, 255, 255, 0.16);
-  --panel-solid: rgba(10, 11, 22, 0.94);
-  --value: #2cc9ff;
   --masthead-blend: screen;
   font-synthesis: none;
 }
@@ -17,13 +10,6 @@
 :root[data-theme="light"] {
   --ink: #1b2140;
   --ink-dim: #5d6690;
-  --panel: rgba(250, 249, 245, 0.8);
-  --panel-edge: rgba(20, 24, 48, 0.08);
-  --widget: rgba(20, 24, 48, 0.07);
-  --widget-hover: rgba(20, 24, 48, 0.11);
-  --widget-focus: rgba(20, 24, 48, 0.15);
-  --panel-solid: rgba(250, 249, 245, 0.96);
-  --value: #0b6f9e;
   --masthead-blend: multiply;
 }
 
@@ -42,11 +28,9 @@ html, body {
 #stage {
   position: fixed;
   inset: 0;
-  display: block;
   width: 100%;
   height: 100%;
-  touch-action: none;
-  cursor: crosshair;
+  aspect-ratio: auto;
 }
 
 .masthead {
@@ -91,40 +75,7 @@ html, body {
 #gpu-text:empty { display: none; }
 #gpu-text { opacity: 0.8; }
 
-/* lil-gui, dressed down to match */
-.lil-gui {
-  --background-color: var(--panel);
-  --widget-color: var(--widget);
-  --focus-color: var(--widget-focus);
-  --hover-color: var(--widget-hover);
-  --text-color: var(--ink);
-  --title-text-color: var(--ink);
-  --number-color: var(--value);
-  --string-color: var(--value);
-  --title-background-color: var(--widget);
-  --font-family: ui-monospace, Menlo, monospace;
-  --font-size: 10.5px;
-  --widget-height: 18px;
-  --name-width: 52%;
-  backdrop-filter: blur(14px);
-  border-left: 1px solid var(--panel-edge);
-}
-
-/* What the option under the pointer does; pinned to the panel's bottom. */
-.panel-help {
-  position: sticky;
-  bottom: 0;
-  padding: 8px var(--padding, 4px);
-  min-height: 3.6em;
-  font-size: 10px;
-  line-height: 1.45;
-  color: var(--ink-dim);
-  background: var(--panel-solid);
-  border-top: 1px solid var(--panel-edge);
-}
-
 @media (max-width: 640px) {
   .masthead { padding: 16px 16px 0 16px; }
   .readout { padding: 0 16px 14px 16px; }
-  .lil-gui.root { width: 240px; }
 }

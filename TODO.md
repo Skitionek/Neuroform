@@ -9,6 +9,13 @@ bytes. Measure the gain against losing the cells' region tint and glow
 colour; they could be looked up per node instead of carried per pixel.
 
 ## Done
+- Packaged as a web component, `<neuro-form>`, installable from GitHub
+  (`npm install github:Skitionek/Neuroform`), MIT licensed. The site is one
+  of those elements.
+- Placeholder images: `captureFirstRender()`, `snapshot()` and
+  `saveSnapshot()` in the browser, `npx neuroform-snapshot` from the command
+  line, and a `placeholder` attribute that shows the image until the first
+  frame.
 - Zoom-based goo: zoomed out, the cells merge into one uniform brain mass and
   dots and synapses fade into it; zoomed in, it resolves into neurons
   (`merge`).
