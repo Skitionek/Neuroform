@@ -90,6 +90,25 @@ export const PRESETS: Record<string, Preset> = {
       depth: 0.75,
     },
   },
+  afterglow: {
+    description: 'A near-black brain on black, revealed only by constant chatter and its long afterglow.',
+    settings: {
+      brainColor: '#0c0e18',
+      background: '#000000',
+      // Sparkle everywhere draws the outline; chatter adds small bursts,
+      // kept local by unreliable synapses and a higher threshold.
+      shimmer: 2500,
+      spontaneous: 5,
+      reliability: 0.35,
+      threshold: 0.46,
+      glow: 2.6,
+      pointSize: 6,
+      edgeOpacity: 0.012,
+      pulseIntensity: 1.3,
+      bloom: 0.5,
+      depth: 0.4,
+    },
+  },
   lite: {
     description: 'For laptops and phones: 40,000 neurons and fewer cells, same character.',
     settings: {

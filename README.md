@@ -177,6 +177,7 @@ and any other setting in the same link applies on top:
 | `wiring` | the connectome: no cells, brighter synapses and long signal trails |
 | `cells` | every neuron a cell, larger and looser, in violet |
 | `ember` | warm tissue on a near-black ground, with the cool signal for contrast |
+| `afterglow` | a near-black brain on black, revealed only by constant chatter and its long afterglow |
 | `lite` | for laptops and phones: 40,000 neurons and fewer cells |
 
 Presets live in `src/ui/presets.ts`; each lists only what it changes.

@@ -188,7 +188,7 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   signal.add(g, 'range', 0.1, 6, 0.05).name('signal range');
   signal.add(g, 'glow', 0.05, 3, 0.01).name('afterglow');
   signal.add(g, 'spontaneous', 0, 5, 0.01).name('idle chatter');
-  signal.add(g, 'shimmer', 0, 600, 5).name('shimmer');
+  signal.add(g, 'shimmer', 0, 3000, 10).name('shimmer');
   signal.onChange(() => handlers.onSignalChange());
 
   const look = gui.addFolder('look');
