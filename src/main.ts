@@ -41,7 +41,7 @@ const readout = document.querySelector<HTMLElement>('#readout-text')!;
 
 const state: PanelState = {
   structure: {
-    nodes: 55000,
+    nodes: 200000,
     shape: 'scan',
     seed: 7,
     foldDepth: 0.034,
@@ -71,11 +71,11 @@ const state: PanelState = {
     cometLength: 0.055,
     bloom: 0.45,
     autoRotate: true,
-    restFps: 20,
+    restFps: 24,
     neurons: true,
     // Small blobs on every node; the merge is depth-aware, so only nodes
     // that are actually close fuse.
-    cellDensity: 0.4,
+    cellDensity: 0.38,
     cellSize: 0.003,
     cellZoom: 1,
     depth: 0.7,
