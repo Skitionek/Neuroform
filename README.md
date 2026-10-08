@@ -161,6 +161,26 @@ Everything downstream reads the same `NetworkGraph`, so nothing in the
 simulation or the renderer changes when the network starts coming from a
 dataset instead of from noise.
 
+## Presets
+
+The panel's **preset** menu, or `?preset=name` in a link, picks a curated
+look. A preset resets every setting to the default and then applies its own,
+and any other setting in the same link applies on top:
+`?preset=storm&bloom=1`.
+
+| | |
+|---|---|
+| `default` | the tuned look: a busy brain of 200,000 neurons, cells on, drifting |
+| `calm` | slow, sparse waves with long afterglow and little idle noise |
+| `storm` | everything fires: reliable synapses, low threshold, waves that sweep the whole brain |
+| `paper` | light theme: activity drawn as ink on warm paper |
+| `wiring` | the connectome: no cells, brighter synapses and long signal trails |
+| `cells` | every neuron a cell, larger and looser, in violet |
+| `ember` | warm tissue on a near-black ground, with the cool signal for contrast |
+| `lite` | for laptops and phones: 40,000 neurons and fewer cells |
+
+Presets live in `src/ui/presets.ts`; each lists only what it changes.
+
 ## Knobs
 
 Any setting is also a URL parameter, so a particular brain is a link:

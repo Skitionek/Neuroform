@@ -33,6 +33,7 @@ import { setBrainColor } from './render/palette';
 import { NodePicker } from './render/picker';
 import { PulseLayer } from './render/pulses';
 import { createPanel, type PanelState } from './ui/panel';
+import { PRESETS } from './ui/presets';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#stage')!;
 const readout = document.querySelector<HTMLElement>('#readout-text')!;
@@ -112,6 +113,36 @@ function applyUrlOverrides(): void {
   }
 }
 
+/** The settings as shipped, before any preset or URL changes them. */
+const DEFAULTS: PanelState = structuredClone(state);
+
+/** Settings groups, as plain records, for code that walks every setting. */
+function settingGroups(target: PanelState): Record<string, unknown>[] {
+  return [target.structure, target.signal, target.look] as unknown as Record<string, unknown>[];
+}
+
+/**
+ * Resets every setting to its default, then applies a preset's own. Unknown
+ * names do nothing. Returns whether the network's structure changed, which
+ * needs a rebuild.
+ */
+function loadPreset(name: string): boolean {
+  const preset = PRESETS[name];
+  if (!preset) return false;
+  const structureBefore = JSON.stringify(state.structure);
+  const defaults = settingGroups(DEFAULTS);
+  settingGroups(state).forEach((group, i) => {
+    Object.assign(group, defaults[i]);
+    for (const key of Object.keys(group)) {
+      const value = (preset.settings as Record<string, unknown>)[key];
+      if (value !== undefined) group[key] = value;
+    }
+  });
+  return JSON.stringify(state.structure) !== structureBefore;
+}
+
+// `?preset=storm` first, so any other setting in the link applies on top.
+loadPreset(new URLSearchParams(window.location.search).get('preset') ?? '');
 applyUrlOverrides();
 // A theme picked in the URL brings its own background unless one is given.
 {
@@ -700,6 +731,13 @@ createPanel(state, {
   onLookChange: () => applyLook(),
   onStimulate: () => window.neuroform.stimulate(),
   onReset: () => sim.reset(),
+  onPreset: (name) => {
+    if (loadPreset(name)) void build();
+    else {
+      applySignal();
+      applyLook();
+    }
+  },
 });
 
 void build().then(() => frame());
