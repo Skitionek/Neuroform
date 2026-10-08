@@ -39,9 +39,12 @@ signal and look controls.
 
 `.github/workflows/pages.yml` deploys the default branch to GitHub Pages, and
 with it a live preview of every open pull request from this repository, at
-`https://skitionek.github.io/Neuroform/pr/<number>/`. The workflow comments
-the link on the pull request and refreshes the preview on every push; it goes
-away once the pull request closes. Pull requests from forks get no preview.
+`https://skitionek.github.io/Neuroform/pr/<number>/`. Each update is tracked
+as a GitHub deployment: the site in the `github-pages` environment, each
+preview in `pr-<number>-preview`, so a pull request shows its preview with a
+**View deployment** link and the repository's Deployments page lists every
+update. The preview refreshes on every push and is marked inactive, and
+removed, once the pull request closes. Pull requests from forks get no preview.
 Turn Pages on once under the repository's Settings → Pages → Source:
 **GitHub Actions**. The build uses relative asset paths, so it works under any
 repository name, in a preview folder or on a custom domain.
