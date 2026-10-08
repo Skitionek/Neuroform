@@ -5,6 +5,7 @@
 import GUI from 'lil-gui';
 import { BRAIN_SHAPES, type BrainShape } from '../brain/shape';
 import { THEME_BACKGROUND, THEME_BRAIN, type Theme } from '../render/theme-pass';
+import { PRESET_NAMES, PRESETS } from './presets';
 
 export interface StructureSettings {
   nodes: number;
@@ -71,6 +72,8 @@ export interface PanelHandlers {
   onLookChange(): void;
   onStimulate(): void;
   onReset(): void;
+  /** Loads a preset into the state; the panel refreshes its display after. */
+  onPreset(name: string): void;
 }
 
 export interface PanelState {
@@ -84,6 +87,7 @@ export interface PanelState {
  * pointer or keyboard focus, and as a native tooltip.
  */
 const HELP: Record<string, string> = {
+  preset: 'Curated combinations of settings. Picking one resets everything to the defaults, then applies its own; tweak from there.',
   nodes: 'How many neurons make up the brain. More is finer and slower; the other settings are normalised, so behaviour and brightness stay the same.',
   shape: 'classic: the original egg with noise folds. anatomical: built from lobes, fissures and named sulci. scan: a real brain, from the MNI ICBM152 template (77 kB, loaded when picked).',
   seed: 'Which brain: the same seed always grows the same shape and wiring.',
@@ -129,6 +133,25 @@ const HELP: Record<string, string> = {
 export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   const gui = new GUI({ title: 'neuroform' });
   gui.close();
+
+  // The help line exists once every control does; until then, a no-op.
+  let help: (text: string) => void = () => {};
+  const initial = new URLSearchParams(window.location.search).get('preset');
+  const picked = { preset: initial && PRESETS[initial] ? initial : 'default' };
+  // 'custom' marks settings that match no preset; picking it changes nothing.
+  const preset = gui.add(picked, 'preset', [...PRESET_NAMES, 'custom']).onChange((name: string) => {
+    if (!PRESETS[name]) return;
+    handlers.onPreset(name);
+    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    syncFolds();
+    help(PRESETS[name].description);
+  });
+  // Once anything else is touched, the settings are no longer that preset.
+  gui.onChange(({ controller }) => {
+    if (controller === preset) return;
+    picked.preset = 'custom';
+    preset.updateDisplay();
+  });
 
   const structure = gui.addFolder('structure');
   const s = state.structure;
@@ -203,12 +226,15 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
   gui.add({ fire: () => handlers.onStimulate() }, 'fire').name('fire a node');
   gui.add({ reset: () => handlers.onReset() }, 'reset').name('quiet the network');
 
-  attachHelp(gui);
+  help = attachHelp(gui);
   return gui;
 }
 
-/** Tooltips on every control, plus a help line that follows the pointer and focus. */
-function attachHelp(gui: GUI): void {
+/**
+ * Tooltips on every control, plus a help line that follows the pointer and
+ * focus. Returns a function that puts other text in the line.
+ */
+function attachHelp(gui: GUI): (text: string) => void {
   const idle = 'Point at an option to see what it does.';
   const line = document.createElement('div');
   line.className = 'panel-help';
@@ -226,4 +252,5 @@ function attachHelp(gui: GUI): void {
     el.addEventListener('focusin', show);
   }
   gui.domElement.addEventListener('pointerleave', () => { line.textContent = idle; });
+  return (text: string) => { line.textContent = text; };
 }
