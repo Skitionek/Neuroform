@@ -106,7 +106,7 @@ about 2 seconds off the main thread; swapping them in costs ~70ms on it.
   testing); a plain draw that works out its synapse from `gl_VertexID` is not.
 - **Rendering is paced.** While a wave runs or the camera is being handled,
   every frame is drawn; at rest only slow motion remains, so frames are drawn
-  at `restFps` (20 by default) and the rest are skipped, about two thirds of
+  at `restFps` (24 by default) and the rest are skipped, three in five of
   them. The orbit is driven by elapsed time, so it turns at the same speed at
   any frame rate or refresh rate.
 - **Cells are drawn only as finely as they need.** Their density buffer is a
