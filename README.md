@@ -70,8 +70,10 @@ import 'neuroform'; // defines <neuro-form>
 Every setting in [Knobs](#knobs) is an attribute, in kebab case
 (`brain-color`, `point-size`, `auto-rotate="false"`), applied on top of
 `preset`; change one and the brain follows live. Without a size of its own
-the element is a full-width 16:10 block. Several can share a page; each
-pauses while off screen.
+the element is a full-width 16:10 block. Any shape works: the opening view
+fits the brain to the element's width as well as its height, so a tall,
+phone-shaped element (9:16 and narrower) shows all of it too, through the
+whole drift. Several can share a page; each pauses while off screen.
 
 | attribute | |
 |---|---|
