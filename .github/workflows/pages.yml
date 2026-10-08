@@ -1,46 +1,125 @@
-# Builds the site and publishes it to GitHub Pages.
+# Publishes the site to GitHub Pages, with a live preview of every open pull
+# request from this repository at <site>/pr/<number>/.
+#
 # One-time setup: repository Settings → Pages → Source: "GitHub Actions".
+#
+# Pages holds one deployment at a time, so every run rebuilds the whole site:
+# the default branch at the root, then each open pull request into its own
+# folder. A preview appears when a pull request opens or is pushed to, and
+# disappears with the next run after it closes.
+#
+# Pull requests run this as pull_request_target: the workflow comes from the
+# default branch, which is what the github-pages environment allows to
+# deploy. Their code is only built, in a job that can read and nothing more,
+# and pull requests from forks are left out.
 name: Deploy to GitHub Pages
 
 on:
   push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+permissions: {}
 
-# One deployment at a time; a newer push supersedes a queued one.
+# The newest run includes everything, so an older one can be dropped.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      previews: ${{ steps.previews.outputs.built }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      # The build uses relative asset paths, so the same output works at the
+      # root and in a preview folder.
       - run: npm ci
-      # Typechecks, then builds with relative asset paths, so the site works
-      # under https://<user>.github.io/<repo>/ without knowing the repo name.
       - run: npm run build
+
+      - name: Build a preview of each open pull request
+        id: previews
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 30 \
+            --json number,headRefOid,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.headRefOid)"' > "$RUNNER_TEMP/prs.txt"
+          built=""
+          # Read on fd 3: npm would otherwise eat the list from stdin.
+          while read -r number sha <&3; do
+            [ -n "$number" ] || continue
+            dir="$RUNNER_TEMP/pr-$number"
+            if git fetch --no-tags --depth=1 origin "$sha" \
+              && git worktree add --detach "$dir" "$sha" \
+              && (cd "$dir" && npm ci && npm run build); then
+              mkdir -p "dist/pr/$number"
+              cp -r "$dir/dist/." "dist/pr/$number/"
+              built="$built $number"
+            else
+              echo "::warning::the preview of #$number did not build"
+            fi
+          done 3< "$RUNNER_TEMP/prs.txt"
+          echo "built=$built" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
-    # Every push is built (and so checked); only the default branch goes live.
-    if: github.ref_name == github.event.repository.default_branch
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Links the preview from the pull request: one comment, kept up to date.
+  comment:
+    needs: [build, deploy]
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action != 'closed' &&
+      !github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          SITE: ${{ needs.deploy.outputs.url }}
+          BUILT: ${{ needs.build.outputs.previews }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const marker = '<!-- pages-preview -->';
+            const sha = pr.head.sha.slice(0, 7);
+            const built = process.env.BUILT.split(' ').includes(String(pr.number));
+            const url = new URL(`pr/${pr.number}/`, process.env.SITE).href;
+            const body = built
+              ? `${marker}\n**Live preview:** ${url}\n\nBuilt from ${sha}; it updates with every push and goes away when the pull request closes.`
+              : `${marker}\nThe preview of ${sha} did not build; see the workflow run.`;
+            const { owner, repo } = context.repo;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number });
+            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.includes(marker));
+            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
