@@ -183,6 +183,9 @@ export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
     l.brainColor = THEME_BRAIN[value];
     background.updateDisplay();
     brain.updateDisplay();
+    // lil-gui tells the folder about a change before the controller's own
+    // handler runs, so the look was applied with the old colours: again.
+    handlers.onLookChange();
   });
   look.add(l, 'transparent');
   look.add(l, 'bloom', 0, 2, 0.02);
