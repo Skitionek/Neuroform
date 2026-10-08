@@ -75,7 +75,7 @@ const state: PanelState = {
     neurons: true,
     // Small blobs on every node; the merge is depth-aware, so only nodes
     // that are actually close fuse.
-    cellDensity: 1,
+    cellDensity: 0.4,
     cellSize: 0.003,
     cellZoom: 1,
     depth: 0.7,
@@ -127,14 +127,24 @@ applyUrlOverrides();
 // with toDataURL. It costs a little performance, so it stays opt-in.
 const captureMode = new URLSearchParams(window.location.search).get('capture') === '1';
 
-const renderer = new WebGLRenderer({
-  canvas,
+/** Whether the canvas was created with an alpha channel; fixed for the page's life. */
+const CANVAS_ALPHA = state.look.transparent;
+
+// An alpha channel only when transparency is asked for: an opaque canvas
+// spares the browser blending it over the page every frame. three.js always
+// asks for alpha itself, so the context is made here. Turning transparency
+// on later reloads with it (see applyTheme).
+const context = canvas.getContext('webgl2', {
+  alpha: CANVAS_ALPHA,
+  depth: true,
+  stencil: false,
   antialias: false,
+  premultipliedAlpha: true,
   powerPreference: 'high-performance',
   preserveDrawingBuffer: captureMode,
-  // The theme pass writes real alpha, so `transparent` can show the page.
-  alpha: true,
 });
+if (!context) throw new Error('WebGL2 is not available');
+const renderer = new WebGLRenderer({ canvas, context });
 // Everything draws light on black; ThemePass puts it on the background.
 renderer.setClearColor(0x000000, 0);
 
@@ -339,6 +349,21 @@ function applySignal(): void {
   wake();
 }
 
+/**
+ * Reloads with every current setting in the URL, which applyUrlOverrides
+ * reads back: for changes the live page cannot make, like giving the canvas
+ * an alpha channel. Other parameters (dataset, gpu, capture) are kept.
+ */
+function reloadWithSettings(): void {
+  const params = new URLSearchParams(window.location.search);
+  for (const group of [state.structure, state.signal, state.look] as unknown as Record<string, unknown>[]) {
+    for (const [key, value] of Object.entries(group)) {
+      params.set(key, typeof value === 'boolean' ? (value ? '1' : '0') : String(value).replace(/^#/, ''));
+    }
+  }
+  window.location.search = params.toString();
+}
+
 /** Brain colour the palette was last set to. */
 let brainColor = '';
 
@@ -355,6 +380,10 @@ function applyTheme(look: typeof state.look): void {
     nodeTextures?.refreshTissue();
   }
   if (look.theme !== 'light') look.theme = 'dark';
+  if (look.transparent && !CANVAS_ALPHA) {
+    reloadWithSettings();
+    return;
+  }
   themePass.set(look.theme, look.background, look.transparent);
   const root = document.documentElement;
   root.dataset.theme = look.theme;
