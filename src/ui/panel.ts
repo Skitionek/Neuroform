@@ -116,7 +116,7 @@ const HELP: Record<string, string> = {
   theme: 'dark: light on a dark ground. light: the same activity as ink on paper. Switching resets the background and brain colour to the theme\'s own.',
   background: 'Colour behind the brain.',
   brainColor: 'Resting colour of the brain. The cerebellum and stem keep their tints relative to it; firing stays the signal colour.',
-  transparent: 'Render with an alpha channel and no background, so the brain sits over whatever page it is embedded in. Turning it on reloads the page with your settings kept (the canvas is opaque otherwise, which is faster).',
+  transparent: 'Render with an alpha channel and no background, so the brain sits over whatever page it is embedded in. Turning it on starts a new canvas, keeping the network and your settings (the canvas is opaque otherwise, which is faster).',
   depth: 'How much the far side of the brain darkens, so the near side reads in front. Applies to waves too: activation at the back glows dimmer.',
   fov: 'Field of view in degrees. Wider exaggerates perspective; the camera moves so the brain keeps its size on screen.',
   autoRotate: 'Slowly turn the brain when you are not touching it.',
