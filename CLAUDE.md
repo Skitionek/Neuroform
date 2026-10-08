@@ -40,6 +40,22 @@ there the matching renders are the evidence.
   `docs/renders/<branch>/` and link them with their
   `https://github.com/Skitionek/Neuroform/raw/<branch>/...` URLs.
 
+## Renders in the README follow GitHub's theme
+
+Every render in the README comes in two, from the same view and waves: one
+with `theme=light`, one with `theme=dark`, saved as `<name>-light.jpg` and
+`<name>-dark.jpg`. Show them with a `<picture>` whose
+`<source media="(prefers-color-scheme: dark)">` is the dark one and whose
+`<img>` is the light one, so each reader sees the one matching their GitHub
+theme.
+
+## Pull request previews
+
+`.github/workflows/pages.yml` publishes every open pull request from this
+repository at `https://skitionek.github.io/Neuroform/pr/<number>/` and links it
+from the pull request. Mention the preview in the description when it helps a
+reviewer try the change.
+
 ## Commits
 
 Commits are authored as Skitionek <skitionek@gmail.com>, with no

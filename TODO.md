@@ -9,6 +9,11 @@ bytes. Measure the gain against losing the cells' region tint and glow
 colour; they could be looked up per node instead of carried per pixel.
 
 ## Done
+- Pull request previews on GitHub Pages, at `/pr/<number>/`, linked from the
+  pull request (`.github/workflows/pages.yml`). They start once the workflow
+  is on the default branch.
+- README renders in light and dark pairs that follow the reader's GitHub
+  theme.
 - Packaged as a web component, `<neuro-form>`, installable from GitHub
   (`npm install github:Skitionek/Neuroform`), MIT licensed. The site is one
   of those elements.

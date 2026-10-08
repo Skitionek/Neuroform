@@ -1,0 +1,21 @@
+# Typechecks and builds every push: the site and the package.
+name: Build
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Installing builds the package (prepare: npm run build:lib).
+      - run: npm ci
+      - run: npm run build

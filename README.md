@@ -7,17 +7,45 @@ is a wave of activation sweeping out through the tissue and fading.
 
 **Live:** https://skitionek.github.io/Neuroform/
 
-![Three bursts of activation spreading through a 55,000-node brain](docs/screenshots/wave.jpg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/wave-dark.jpg" />
+  <img src="docs/screenshots/wave-light.jpg" alt="Three bursts of activation spreading through a 200,000-node brain" />
+</picture>
 
 <p>
-  <img src="docs/screenshots/side.jpg" width="49%" alt="Profile view: bursts in the cerebrum and the cerebellum" />
-  <img src="docs/screenshots/cells.jpg" width="49%" alt="Close-up: neurons drawn as merging cells joined by neurites, with a burst firing" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/side-dark.jpg" />
+    <img src="docs/screenshots/side-light.jpg" width="49%" alt="Profile view: bursts in the cerebrum and the cerebellum" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/cells-dark.jpg" />
+    <img src="docs/screenshots/cells-light.jpg" width="49%" alt="Close-up: neurons drawn as merging cells joined by neurites, with a burst firing" />
+  </picture>
 </p>
+
+The images follow GitHub's theme: the light theme's renders on a light page,
+the dark theme's on a dark one.
 
 ```
 npm install
 npm run dev
 ```
+
+Click a node to fire it. Drag to orbit, scroll to zoom. `space` fires a random
+node, `r` quiets the network. The panel in the corner opens with the structure,
+signal and look controls.
+
+### Publishing
+
+`.github/workflows/pages.yml` deploys the default branch to GitHub Pages, and
+with it a live preview of every open pull request from this repository, at
+`https://skitionek.github.io/Neuroform/pr/<number>/`. The workflow comments
+the link on the pull request and refreshes the preview on every push; it goes
+away once the pull request closes. Pull requests from forks get no preview.
+Turn Pages on once under the repository's Settings → Pages → Source:
+**GitHub Actions**. The build uses relative asset paths, so it works under any
+repository name, in a preview folder or on a custom domain.
+`.github/workflows/ci.yml` builds every push.
 
 ## On your own page
 
@@ -85,17 +113,6 @@ In the browser, `element.captureFirstRender()` resolves to the first frame
 as an image Blob (ask before the element is drawn, right after adding it),
 `element.snapshot({ width, height, type })` draws one now, and
 `element.saveSnapshot('neuroform.png')` downloads it.
-
-### Publishing
-
-`.github/workflows/pages.yml` builds every push and deploys the default
-branch to GitHub Pages. Turn it on once under the repository's
-Settings → Pages → Source: **GitHub Actions**. The build uses relative asset
-paths, so it works under any repository name or a custom domain.
-
-Click a node to fire it. Drag to orbit, scroll to zoom. `space` fires a random
-node, `r` quiets the network. The panel in the corner opens with the structure,
-signal and look controls.
 
 ## What's going on
 
