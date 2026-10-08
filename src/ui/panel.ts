@@ -130,13 +130,20 @@ const HELP: Record<string, string> = {
   reset: 'Stop every signal and let the network go dark.',
 };
 
-export function createPanel(state: PanelState, handlers: PanelHandlers): GUI {
-  const gui = new GUI({ title: 'neuroform' });
+export interface PanelOptions {
+  /** Where the panel goes; without one it floats over the page's corner. */
+  container?: HTMLElement;
+  /** The preset the settings started from, shown in the menu. */
+  preset?: string | null;
+}
+
+export function createPanel(state: PanelState, handlers: PanelHandlers, options: PanelOptions = {}): GUI {
+  const gui = new GUI({ title: 'neuroform', container: options.container });
   gui.close();
 
   // The help line exists once every control does; until then, a no-op.
   let help: (text: string) => void = () => {};
-  const initial = new URLSearchParams(window.location.search).get('preset');
+  const initial = options.preset;
   const picked = { preset: initial && PRESETS[initial] ? initial : 'default' };
   // 'custom' marks settings that match no preset; picking it changes nothing.
   const preset = gui.add(picked, 'preset', [...PRESET_NAMES, 'custom']).onChange((name: string) => {

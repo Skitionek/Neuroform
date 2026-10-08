@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Builds public/brain-mni152.sdf.gz, the "scan" brain shape, from the MNI
+Builds src/assets/brain-mni152.sdf.gz, the "scan" brain shape, from the MNI
 ICBM152 2009a symmetric template's grey- and white-matter probability maps.
 
 The output is a signed distance field on a regular grid, in Neuroform's
@@ -11,12 +11,12 @@ it does from the procedural shapes.
 
 Usage:
     pip install numpy scipy nibabel
-    python3 scripts/build-brain-sdf.py GM.nii.gz WM.nii.gz public/brain-mni152.sdf.gz [VOXEL_MM]
+    python3 scripts/build-brain-sdf.py GM.nii.gz WM.nii.gz src/assets/brain-mni152.sdf.gz [VOXEL_MM]
 
 The two maps ship with nilearn (nilearn/datasets/data/
 mni_icbm152_{gm,wm}_tal_nlin_sym_09a_converted.nii.gz) and with the original
 distribution at https://www.bic.mni.mcgill.ca/ServicesAtlases/ICBM152NLin2009.
-Licence: see public/brain-mni152.LICENSE.txt.
+Licence: see src/assets/brain-mni152.LICENSE.txt.
 
 File format (gzip of):
     6 bytes   magic "NFSDF2"

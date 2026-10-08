@@ -19,6 +19,73 @@ npm install
 npm run dev
 ```
 
+## On your own page
+
+Neuroform is a web component. Install it straight from GitHub (npm builds
+the package on install):
+
+```
+npm install github:Skitionek/Neuroform
+```
+
+```js
+import 'neuroform'; // defines <neuro-form>
+```
+
+```html
+<neuro-form preset="calm" brain-color="#6b4f9a" style="height: 480px"></neuro-form>
+```
+
+Every setting in [Knobs](#knobs) is an attribute, in kebab case
+(`brain-color`, `point-size`, `auto-rotate="false"`), applied on top of
+`preset`; change one and the brain follows live. Without a size of its own
+the element is a full-width 16:10 block. Several can share a page; each
+pauses while off screen.
+
+| attribute | |
+|---|---|
+| `preset` | a [preset](#presets) to start from |
+| `panel` | show the control panel in the element's corner |
+| `placeholder` | an image shown until the first frame is drawn (see below) |
+| `keyboard` | where `space` and `r` are heard: `element` (default, once focused), `window`, `none` |
+| `dataset` | a network to load ([format](#driving-it-from-data)) instead of generating one |
+| `scan-url` | where the scan brain's grid is; by default it is inside the bundle |
+
+From script, the element has `set({ bloom: 1, theme: 'light' })`,
+`loadPreset(name)`, `stimulate(node?)`, `reset()`, `settings`, and
+`neuroform`, the engine with the graph, the simulation and the three.js scene.
+It sends `ready`, `firstrender`, `stats` (counts and fps, five times a second,
+for a readout), `change` and `error` events. The engine works without the
+element too: `new Neuroform({ canvas, preset: 'storm' })`.
+
+Without a bundler, the standalone build has three.js inside:
+
+```html
+<script type="module" src="node_modules/neuroform/dist-lib/neuroform.standalone.js"></script>
+```
+
+Types come with the package.
+
+### Placeholder images
+
+The piece takes a moment to grow its network, so a page can show a still
+until it appears. `placeholder="neuroform.jpg"` shows one and fades the live
+brain in over it. To make one that matches exactly, capture the first frame:
+
+```
+npm i -D playwright && npx playwright install chromium
+npx neuroform-snapshot --out neuroform.jpg --width 1200 --height 750 --preset calm
+```
+
+Any attribute is an option (`--theme light --nodes 60000`); `--pixel-ratio 2`
+renders for high-density screens and `--help` lists the rest. The same image
+at 1200×630 makes a page's social preview card.
+
+In the browser, `element.captureFirstRender()` resolves to the first frame
+as an image Blob (ask before the element is drawn, right after adding it),
+`element.snapshot({ width, height, type })` draws one now, and
+`element.saveSnapshot('neuroform.png')` downloads it.
+
 ### Publishing
 
 `.github/workflows/pages.yml` builds every push and deploys the default
@@ -208,7 +275,7 @@ The pulse pool grows with the network so big waves are not clipped.
 | `glow`, `shimmer`, `spontaneous` | afterglow, idle sparkle, how often the network fires on its own |
 | `pointSize`, `edgeOpacity`, `pulseIntensity`, `cometLength`, `bloom` | the look |
 | `depth`, `fov` | how much the far side darkens, waves included (`0` off); field of view, changed as a dolly zoom so the brain keeps its size |
-| `theme`, `background`, `brainColor`, `transparent` | `dark` (light on a dark ground) or `light` (the same activity as ink on paper); the background and resting brain colours, which each theme sets to its own when picked (`?background=ffffff&brainColor=c0603a`; the cerebellum and stem keep their tints relative to the brain colour); `1` renders with an alpha channel and no background, for embedding over another page (the canvas is opaque otherwise, which is cheaper, so switching it on in the panel reloads the page with the current settings) |
+| `theme`, `background`, `brainColor`, `transparent` | `dark` (light on a dark ground) or `light` (the same activity as ink on paper); the background and resting brain colours, which each theme sets to its own when picked (`?background=ffffff&brainColor=c0603a`; the cerebellum and stem keep their tints relative to the brain colour); `1` renders with an alpha channel and no background, for embedding over another page (the canvas is opaque otherwise, which is cheaper, so switching it on later starts a new canvas, keeping the network and settings) |
 | `restFps` | frame rate while nothing fast is happening; `0` draws every frame |
 | `neurons`, `cellDensity`, `cellSize`, `cellZoom` | cells on or off (`0`), share of nodes drawn as cells, blob radius, how far cells follow the zoom (`0` fixed in the brain, `1` fixed on screen) |
 | `merge` | zoomed out, cells merge into one uniform brain shape and dots and synapses fade into it; zoomed in, it resolves into neurons (`0` off) |
@@ -216,14 +283,19 @@ The pulse pool grows with the network so big waves are not clipped.
 | `gpu` | `1` for GPU pass timings, `finish` for the stalling fallback |
 
 `?capture=1` keeps the drawing buffer readable for screenshots.
-`window.neuroform` exposes the graph, the simulation and the layers for driving
-the piece from a script: `stimulate(node?)`, `reset()`,
-`look({ bloom: 1 })` and `rebuild({ nodes: 60000, seed: 3 })`.
+On the site, `window.neuroform` is the engine, which exposes the graph, the
+simulation and the layers for driving the piece from a script:
+`stimulate(node?)`, `reset()`, `set({ bloom: 1 })` and
+`rebuild({ nodes: 60000, seed: 3 })`.
+
+## Licence
+
+MIT, see `LICENSE`. The scan brain's grid keeps its own notice (below).
 
 ## Credits
 
 The `scan` brain shape is derived from the MNI ICBM152 2009a nonlinear
 symmetric template (Fonov et al., NeuroImage 2009), copyright (C) 1993-2004
 Louis Collins, McConnell Brain Imaging Centre, Montreal Neurological
-Institute, McGill University; see `public/brain-mni152.LICENSE.txt`.
+Institute, McGill University; see `src/assets/brain-mni152.LICENSE.txt`.
 `scripts/build-brain-sdf.py` regenerates it.
