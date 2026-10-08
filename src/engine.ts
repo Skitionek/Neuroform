@@ -16,6 +16,7 @@ import {
   Raycaster,
   Scene,
   Vector2,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -148,6 +149,12 @@ export class Neuroform extends EventTarget {
   private readonly dataset: string | null;
   private readonly scanUrl: string;
   private readonly homeDistanceAt42: number;
+  /** Where the camera opens, seen from the target: drifting turns it about y. */
+  private readonly homeDirection: Vector3;
+  /** How much further back the opening view sits so the brain fits the width too. */
+  private fit = 1;
+  /** Set once the user orbits or zooms; the view is theirs from then on. */
+  private handled = false;
   private readonly panel: GUI | null = null;
   private readonly cleanup: (() => void)[] = [];
 
@@ -235,6 +242,7 @@ export class Neuroform extends EventTarget {
     this.camera = new PerspectiveCamera(42, 1, 0.01, 50);
     this.camera.position.set(1.35, 0.42, 1.5);
     this.homeDistanceAt42 = this.camera.position.length();
+    this.homeDirection = this.camera.position.clone().normalize();
 
     const controls = (this.controls = new OrbitControls(this.camera, this.canvas));
     controls.enableDamping = true;
@@ -246,6 +254,7 @@ export class Neuroform extends EventTarget {
     controls.autoRotateSpeed = 0.28;
     controls.addEventListener('start', () => {
       this.interacting = true;
+      this.handled = true;
       this.wake();
     });
     controls.addEventListener('end', () => {
@@ -617,9 +626,69 @@ export class Neuroform extends EventTarget {
 
   /* ---------------------------------------------------------------- look */
 
-  /** The opening distance at the current fov, after the dolly zoom. */
+  /** The opening distance at the current fov, after the dolly zoom, fitted to the shape of the view. */
   private homeDistance(): number {
+    return this.fov42Distance() * this.fit;
+  }
+
+  /** The opening distance at the current fov, framed by height alone. */
+  private fov42Distance(): number {
     return (this.homeDistanceAt42 * Math.tan((42 * Math.PI) / 360)) / Math.tan((this.camera.fov * Math.PI) / 360);
+  }
+
+  /**
+   * The opening view is framed by height: on a wide view that leaves room at
+   * the sides, but a tall one (a phone held upright) would cut the brain
+   * off left and right. This moves the opening view back just far enough
+   * that the brain fills the width with the same margin it leaves top and
+   * bottom: at every angle the drift turns it through, or at the opening
+   * angle when it does not drift. Landscape views are
+   * left exactly as they were. Until the user handles the camera, it is
+   * moved to match.
+   */
+  private refit(): void {
+    if (!this.nodeLayer) return;
+    const camera = this.camera;
+    const base = this.fov42Distance();
+    const tanV = Math.tan((camera.fov * Math.PI) / 360);
+    const tanH = tanV * camera.aspect;
+    const positions = this.nodeLayer.geometry.getAttribute('position');
+    const stride = Math.max(1, Math.floor(positions.count / 3000));
+    const up = new Vector3(0, 1, 0);
+    const toCamera = new Vector3();
+    const right = new Vector3();
+    const p = new Vector3();
+    const world = this.nodeLayer.points.matrixWorld;
+    let need = base;
+    // Eight turns of the drift about the vertical axis, or none.
+    const turns = this.state.look.autoRotate ? 8 : 1;
+    for (let turn = 0; turn < turns; turn++) {
+      toCamera.copy(this.homeDirection).applyAxisAngle(up, (turn * Math.PI) / 4);
+      right.crossVectors(up, toCamera).normalize();
+      const upright = new Vector3().crossVectors(toCamera, right);
+      // The margin the height leaves at this angle, then the distance at
+      // which the width leaves the same.
+      let margin = 0;
+      for (let i = 0; i < positions.count; i += stride) {
+        p.fromBufferAttribute(positions, i).applyMatrix4(world).sub(this.controls.target);
+        margin = Math.max(margin, Math.abs(p.dot(upright)) / ((base - p.dot(toCamera)) * tanV));
+      }
+      if (margin <= 0) continue;
+      for (let i = 0; i < positions.count; i += stride) {
+        p.fromBufferAttribute(positions, i).applyMatrix4(world).sub(this.controls.target);
+        need = Math.max(need, Math.abs(p.dot(right)) / (margin * tanH) + p.dot(toCamera));
+      }
+    }
+    const fit = need / base;
+    if (Math.abs(fit - this.fit) < 1e-3) return;
+    this.fit = fit;
+    if (!this.handled) {
+      const offset = camera.position.clone().sub(this.controls.target);
+      camera.position.copy(this.controls.target).addScaledVector(offset.normalize(), this.homeDistance());
+    }
+    // Cells are sized as seen from the opening view.
+    const look = this.state.look;
+    this.membraneLayer?.setCellSize(scaleLook(look, this._graph.nodeCount).cellSize, look.cellZoom, this.homeDistance());
   }
 
   /** Background and brain colour for the look's theme. */
@@ -663,6 +732,7 @@ export class Neuroform extends EventTarget {
     this.bloom.strength = look.bloom;
     this.controls.autoRotate = look.autoRotate;
     this.setFov(look.fov);
+    this.refit();
     this.applyTheme();
     this.membranePass.enabled = look.neurons;
     // Re-laying out takes up to ~0.4 s at 200k nodes and the slider fires on
@@ -752,6 +822,7 @@ export class Neuroform extends EventTarget {
 
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
+    this.refit();
     this.nodeLayer?.setViewport(ratio, height, this.camera.fov);
     this.wake(100);
   }

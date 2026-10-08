@@ -9,6 +9,9 @@ bytes. Measure the gain against losing the cells' region tint and glow
 colour; they could be looked up per node instead of carried per pixel.
 
 ## Done
+- The opening view fits portrait screens: on views narrower than the brain,
+  the camera opens further back so the brain fits the width with the margin
+  it has top and bottom (through the whole drift when drifting).
 - Pull request previews on GitHub Pages, at `/pr/<number>/`, linked from the
   pull request (`.github/workflows/pages.yml`). They start once the workflow
   is on the default branch.
