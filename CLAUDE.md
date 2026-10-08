@@ -52,8 +52,9 @@ theme.
 ## Pull request previews
 
 `.github/workflows/pages.yml` publishes every open pull request from this
-repository at `https://skitionek.github.io/Neuroform/pr/<number>/` and links it
-from the pull request. Mention the preview in the description when it helps a
+repository at `https://skitionek.github.io/Neuroform/pr/<number>/`, tracked as
+a GitHub deployment in the `pr-<number>-preview` environment (the site itself
+deploys to `github-pages`), so the pull request shows a "View deployment" link. Mention the preview in the description when it helps a
 reviewer try the change.
 
 ## Commits

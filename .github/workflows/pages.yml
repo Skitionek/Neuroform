@@ -1,6 +1,12 @@
 # Publishes the site to GitHub Pages, with a live preview of every open pull
 # request from this repository at <site>/pr/<number>/.
 #
+# Both are tracked as GitHub deployments: the site in the github-pages
+# environment (deploy-pages records it), each preview in its own
+# pr-<number>-preview environment, so a pull request shows its preview as a
+# deployment with a "View deployment" link, and the repository's
+# Deployments page lists every update.
+#
 # One-time setup: repository Settings → Pages → Source: "GitHub Actions".
 #
 # Pages holds one deployment at a time, so every run rebuilds the whole site:
@@ -29,6 +35,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The pull request's preview deployment, in progress while the site builds.
+  start:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.event.action != 'closed' &&
+      !github.event.pull_request.head.repo.fork
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+    outputs:
+      id: ${{ steps.deployment.outputs.result }}
+    steps:
+      - id: deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              owner, repo,
+              ref: pr.head.sha,
+              environment: `pr-${pr.number}-preview`,
+              description: `Preview of #${pr.number}`,
+              transient_environment: true,
+              production_environment: false,
+              auto_merge: false,
+              required_contexts: [],
+            });
+            await github.rest.repos.createDeploymentStatus({
+              owner, repo,
+              deployment_id: deployment.id,
+              state: 'in_progress',
+              log_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            });
+            return deployment.id;
+
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -93,33 +135,75 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
-  # Links the preview from the pull request: one comment, kept up to date.
-  comment:
-    needs: [build, deploy]
-    if: >-
-      github.event_name == 'pull_request_target' &&
-      github.event.action != 'closed' &&
-      !github.event.pull_request.head.repo.fork
+  # Records each preview as a deployment of its pull request's head: the
+  # triggering pull request's (started above) and any other whose preview
+  # is not yet recorded for its current commit. A closed pull request's
+  # preview is marked inactive.
+  track:
+    needs: [start, build, deploy]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
+      deployments: write
+      pull-requests: read
     steps:
       - uses: actions/github-script@v7
         env:
           SITE: ${{ needs.deploy.outputs.url }}
+          DEPLOYED: ${{ needs.deploy.result == 'success' }}
           BUILT: ${{ needs.build.outputs.previews }}
+          STARTED: ${{ needs.start.outputs.id }}
         with:
           script: |
-            const pr = context.payload.pull_request;
-            const marker = '<!-- pages-preview -->';
-            const sha = pr.head.sha.slice(0, 7);
-            const built = process.env.BUILT.split(' ').includes(String(pr.number));
-            const url = new URL(`pr/${pr.number}/`, process.env.SITE).href;
-            const body = built
-              ? `${marker}\n**Live preview:** ${url}\n\nBuilt from ${sha}; it updates with every push and goes away when the pull request closes.`
-              : `${marker}\nThe preview of ${sha} did not build; see the workflow run.`;
             const { owner, repo } = context.repo;
-            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number });
-            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.includes(marker));
-            if (mine) await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
-            else await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+            const logUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const environment = (number) => `pr-${number}-preview`;
+            const built = (process.env.BUILT || '').split(' ').filter(Boolean).map(Number);
+            const deployed = process.env.DEPLOYED === 'true';
+            const trigger = context.payload.pull_request;
+
+            if (trigger && context.payload.action === 'closed') {
+              const deployments = await github.rest.repos.listDeployments({ owner, repo, environment: environment(trigger.number), per_page: 10 });
+              for (const { id } of deployments.data) {
+                await github.rest.repos.createDeploymentStatus({ owner, repo, deployment_id: id, state: 'inactive' });
+              }
+            }
+
+            const open = (await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open' }))
+              .filter((pr) => pr.head.repo?.full_name === `${owner}/${repo}`);
+            for (const pr of open) {
+              const ok = deployed && built.includes(pr.number);
+              const status = {
+                state: ok ? 'success' : 'failure',
+                log_url: logUrl,
+                ...(ok ? { environment_url: new URL(`pr/${pr.number}/`, process.env.SITE).href } : {}),
+                auto_inactive: true,
+              };
+              let id = trigger?.number === pr.number && process.env.STARTED ? Number(process.env.STARTED) : null;
+              // Only the pull request that started the run hears of a
+              // failure; the others keep whatever preview is live.
+              if (!id && !ok) continue;
+              if (!id) {
+                // Already recorded for this commit: leave a success alone,
+                // settle anything else (a cancelled run's, say).
+                const [latest] = (await github.rest.repos.listDeployments({ owner, repo, environment: environment(pr.number), per_page: 1 })).data;
+                if (latest && latest.sha === pr.head.sha) {
+                  const [last] = (await github.rest.repos.listDeploymentStatuses({ owner, repo, deployment_id: latest.id, per_page: 1 })).data;
+                  if (last?.state === 'success') continue;
+                  id = latest.id;
+                } else {
+                  id = (await github.rest.repos.createDeployment({
+                    owner, repo,
+                    ref: pr.head.sha,
+                    environment: environment(pr.number),
+                    description: `Preview of #${pr.number}`,
+                    transient_environment: true,
+                    production_environment: false,
+                    auto_merge: false,
+                    required_contexts: [],
+                  })).data.id;
+                }
+              }
+              await github.rest.repos.createDeploymentStatus({ owner, repo, deployment_id: id, ...status });
+              core.info(`#${pr.number}: ${status.state}${ok ? ` at ${status.environment_url}` : ''}`);
+            }
